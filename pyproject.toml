@@ -13,6 +13,8 @@ dependencies = [
     "python-jose[cryptography]>=3.3",  # JWT validation in auth.py / session.py (pulls cryptography)
     "httpx>=0.27",                     # fetch the authorization server's JWKS
     "fastmcp>=3.4.4",
+    "psycopg[binary]>=3.3.4",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.optional-dependencies]
