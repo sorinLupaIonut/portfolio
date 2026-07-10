@@ -35,10 +35,13 @@ Run it:  uv run python -m connector_app.server   (serves http://127.0.0.1:8000/m
 
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import anyio
+import psycopg
 from dotenv import load_dotenv
 
 # Load .env BEFORE importing auth.py — it reads AUTH_ISSUER / AUTH_JWKS_URL / RESOURCE_URL at import.
@@ -148,6 +151,23 @@ def _signed(payload: dict[str, Any]) -> dict[str, Any]:
     return {**payload, "present": config_store.PRESENT_REMINDER}
 
 
+@contextmanager
+def _store_guard() -> Iterator[None]:
+    """Turn a store outage into an honest, clean refusal (invariant 4).
+
+    If the database is unreachable (`psycopg.Error`) or unconfigured (`db` raises `RuntimeError`),
+    the wrapped tool re-raises as a `ToolError` the model is told to relay verbatim: the session
+    can't continue. Crucially it does NOT fall back to an empty shelf — a store that is *down* must
+    never look like a reader who simply has *nothing saved*. We refuse; we never invent state.
+    """
+    try:
+        yield
+    except (psycopg.Error, RuntimeError) as e:
+        raise ToolError(
+            "the reading room can't reach your shelf right now, so this session can't continue"
+        ) from e
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Health check",
@@ -180,8 +200,9 @@ def begin_session() -> dict[str, Any]:
     to every domain_*/user_* call. The rules include the fail-closed instruction (invariant 4).
     """
     sub = _verified_sub()
-    db.ensure_user(sub)
-    state = db.read_state(sub)
+    with _store_guard():
+        db.ensure_user(sub)
+        state = db.read_state(sub)
     return {
         "rules": config_store.rules(),
         "persona": config_store.persona(),
@@ -223,7 +244,8 @@ def user_get_state(session: str) -> dict[str, Any]:
     Identity is the `sub` inside the session token, never an argument (invariant 3).
     """
     sub = _gate(session)
-    return _signed({"state": db.read_state(sub)})
+    with _store_guard():
+        return _signed({"state": db.read_state(sub)})
 
 
 @mcp.tool(
@@ -242,10 +264,11 @@ def user_save_article(session: str, article_id: str) -> dict[str, Any]:
     sub = _gate(session)
     if article_id not in _ARTICLES:
         raise ToolError(f"no article with id {article_id!r}")
-    state = db.read_state(sub)
-    if article_id not in state["reading_list"]:
-        state["reading_list"].append(article_id)
-    return _signed({"state": db.save_state(sub, state)})
+    with _store_guard():
+        state = db.read_state(sub)
+        if article_id not in state["reading_list"]:
+            state["reading_list"].append(article_id)
+        return _signed({"state": db.save_state(sub, state)})
 
 
 @mcp.tool(
@@ -263,10 +286,11 @@ def user_mark_read(session: str, article_id: str) -> dict[str, Any]:
     sub = _gate(session)
     if article_id not in _ARTICLES:
         raise ToolError(f"no article with id {article_id!r}")
-    state = db.read_state(sub)
-    if article_id not in state["finished"]:
-        state["finished"].append(article_id)
-    return _signed({"state": db.save_state(sub, state)})
+    with _store_guard():
+        state = db.read_state(sub)
+        if article_id not in state["finished"]:
+            state["finished"].append(article_id)
+        return _signed({"state": db.save_state(sub, state)})
 
 
 @mcp.tool(
@@ -285,9 +309,10 @@ def user_set_note(session: str, article_id: str, note: str) -> dict[str, Any]:
     sub = _gate(session)
     if article_id not in _ARTICLES:
         raise ToolError(f"no article with id {article_id!r}")
-    state = db.read_state(sub)
-    state["notes"][article_id] = note
-    return _signed({"state": db.save_state(sub, state)})
+    with _store_guard():
+        state = db.read_state(sub)
+        state["notes"][article_id] = note
+        return _signed({"state": db.save_state(sub, state)})
 
 
 if __name__ == "__main__":
