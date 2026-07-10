@@ -1,63 +1,173 @@
-# Connector-Native App — base
+# Reading Room — a connector-native MCP gateway
 
-The starting point for the **Connector-Native Apps** crash course. You don't run a finished app
-from here; you **direct your coding agent** (Claude Code or OpenCode) to build the gateway on top
-of this base, one Concept at a time, using the prompts in the course. Open the folder in your
-agent and it auto-loads `AGENTS.md`, the brief that keeps it inside the four invariants and tells
-it how to prep the environment.
+A single remote **MCP server** that a Claude user adds with one connector URL and one **Authorize**
+click. It turns a plain chat into a small reading app with memory: a seed library of articles the
+user can fetch, save to a reading list, mark as read, and annotate — and the state persists across
+separate chats, tied to *who is signed in*, never to who the model claims to be.
 
-## What's in the box
+The host chat app (claude.ai, the Claude desktop app) brings the model and the agent loop. **This
+server brings the three things a model can't safely bring itself: tools, state, and identity.**
+There is deliberately no agent loop in this repository.
 
-This is a **minimal base**, not a finished app. Only the security-critical core ships complete
-(you read it, you don't regenerate it); you build everything else.
+> Built as the capstone of the *Connector-Native Apps* course. The security-critical token check
+> (`auth.py`) and session primitive (`session.py`) were provided as a fixed standard to build
+> against; **everything else here — the gateway, the OAuth resource-server wiring, the persistence
+> layer, the session contract, the fail-closed design, and the live deployment — I built and
+> verified end to end.** The interesting work is precisely the integration: wiring given security
+> primitives into a correct, hard-to-misuse whole.
+
+---
+
+## What it demonstrates
+
+- **OAuth 2.1 resource server done to spec** — RFC 9728 protected-resource discovery, RFC 8707
+  audience-bound tokens, a real `401 → sign-in` flow, PKCE/S256 assumed at the client.
+- **Identity you can't spoof from a prompt** — every per-user read and write is keyed to the `sub`
+  claim of a *verified* token, sealed in server-side. No tool accepts a `user_id`; the model can
+  never name whose data it touches.
+- **A structural session gate** — a bearer OAuth token is exchanged for a short-lived signed
+  *session* token; every real tool requires it as its first argument, so the model is *forced* to
+  check in before it can do anything.
+- **Fail-closed under failure** — if the store is unreachable, the app refuses honestly ("can't
+  reach your shelf, this session can't continue") instead of inventing state. A store that is *down*
+  never looks like a user who simply has *nothing saved*.
+- **Cross-chat memory** — a two-table Postgres store on Neon; state saved in one chat is there in
+  the next.
+- **Modern Python** — 3.14+, built-in generics, `X | None`, PEP 695 `type` aliases, mypy-clean.
+
+---
+
+## Architecture
 
 ```
-AGENTS.md                  the agent's brief: base prep, the four invariants, the build order
-CLAUDE.md                  one line, @AGENTS.md, so Claude Code loads that same brief
-.claude/skills/
-  live-connector/          GIVEN: drives the Part 5 tunnel (cloudflared + auth off) so claude.ai can reach your app
-.mcp.json / opencode.json  Neon + Context7 MCP servers, pre-declared (authorize once in browser)
-pyproject.toml             only the deps the given code needs; you add fastmcp/psycopg as you build
-.env.example               copy to .env; the user brings the model, so no API key of your own
-src/connector_app/
-  auth.py                  GIVEN, complete: the security check that proves who is signed in (you read it, never rewrite it)
-  session.py               GIVEN, complete: the lock the rest of your tools sit behind
-mock_auth/                 GIVEN: a local sign-in service, so you can test the whole flow without an account
-seed/articles.json         a tiny catalog for your domain
-tests/test_starter.py      five offline smoke tests over the security core
+                         ┌───────────────────────────────────────────────┐
+   Claude host           │              Reading Room gateway              │
+   (model + loop)        │            one FastMCP app, one URL            │
+        │                │                                               │
+        │  MCP over HTTP  │   ┌─────────────────────────────────────┐     │
+        └────────────────┼──▶│ RemoteAuthProvider (OAuth 2.1 RS)    │     │
+     Bearer OAuth token   │   │  • /.well-known/oauth-protected-... │     │
+                         │   │  • delegates to auth.py's 4 checks: │     │
+                         │   │    signature · iss · aud · expiry   │     │
+                         │   └───────────────┬─────────────────────┘     │
+                         │        verified `sub`                          │
+                         │                   ▼                            │
+                         │   begin_session ──▶ mints signed session token │
+                         │                   │  + rules + persona + state │
+                         │                   ▼                            │
+                         │   session gate on every domain_*/user_* tool   │
+                         │                   │                            │
+                         │        ┌──────────┴──────────┐                 │
+                         │   seed library         Neon Postgres           │
+                         │  (articles.json)   users · user_state(jsonb)   │
+                         └───────────────────────────────────────────────┘
 ```
 
-You build (they are **not** here yet): the gateway (`server.py`), the two-table store (`db.py`,
-created through the Neon MCP server), and your rules and persona (`config_store.py`). The course
-walks you through each. There is no Dockerfile: Part 5 runs your connector live over a tunnel
-(the `live-connector` skill), not a container deploy.
+### Two tokens, two jobs
 
-## Prove the security core is green
+1. **OAuth token** (external authorization server, RS256) — verified by `auth.py`'s four checks
+   (JWKS signature, issuer, audience = this server, expiry), then `sub` is extracted. The gateway
+   is a resource server *only*; it never issues tokens.
+2. **Session token** (internal, HS256, 30-min TTL) — minted by `begin_session` from the verified
+   `sub`, and required by every `domain_*`/`user_*` tool. This is the structural gate: nothing
+   auto-invokes `begin_session`, so a tool called without a session fails closed.
+
+---
+
+## The tools (one gateway, three namespaces)
+
+MCP tool names allow only letters, digits, `_`, `-` — never a dot — so the underscore prefix *is*
+the namespace. One server, three groups, seven tools:
+
+| Tool | Group | Session-gated | Purpose |
+|---|---|:---:|---|
+| `config_health` | `config_*` | — | Liveness probe (ungated on purpose, for fail-closed diagnostics) |
+| `begin_session` | entry | issues the token | Check the reader in; return rules + persona + shelf + session token |
+| `domain_get_item` | `domain_*` | ✅ | Fetch one library article by id |
+| `user_get_state` | `user_*` | ✅ | Read the reader's shelf (reading list, finished, notes) |
+| `user_save_article` | `user_*` | ✅ | Add an article to the reading list |
+| `user_mark_read` | `user_*` | ✅ | Mark an article finished |
+| `user_set_note` | `user_*` | ✅ | Attach/replace a note on an article |
+
+Only MCP **tools** are used — no resources, no prompts. The app's rules and persona travel as
+plain data inside `begin_session`'s return value, phrased as cooperation ("here is how to behave
+for this reader"), never as an override, so the host's injection defenses don't discount them.
+
+---
+
+## Data model
+
+```sql
+users(
+  sub         text primary key,          -- the verified OAuth subject; the ONLY identity
+  created_at  timestamptz not null default now()
+)
+user_state(
+  sub         text primary key references users(sub),
+  state       jsonb  not null default '{}',   -- {"reading_list":[…], "finished":[…], "notes":{…}}
+  updated_at  timestamptz not null default now()
+)
+```
+
+One JSON document per user; writers read-modify-write it. Identity is never a query parameter the
+model controls — it is sealed in from the verified token upstream, so the database physically
+cannot be asked for someone else's row.
+
+---
+
+## Tech stack
+
+- **[FastMCP](https://gofastmcp.com)** — the MCP server, streamable HTTP transport
+- **OAuth 2.1** resource-server pattern (RFC 9728 discovery, RFC 8707 audience binding)
+- **Neon** serverless Postgres, via **psycopg 3**
+- **python-jose** (JWT verification), **httpx** (JWKS fetch)
+- **Python 3.14+**, **uv** for env & deps
+- **cloudflared** quick-tunnel for the live demo
+
+---
+
+## Run it
 
 ```bash
 uv sync --extra dev
-uv run pytest -q     # imports, valid token, wrong-audience rejected, isolation, no-session refused
+uv run pytest -q          # 5 green: imports, valid token, wrong-audience rejected, isolation, no-session refused
 ```
 
-Five green checks mean the foundation you build on is sound.
+Bring the gateway up (binds `127.0.0.1:8000`, serves `/mcp`):
 
-## Two tracks
+```bash
+uv run python -m connector_app.server
+```
 
-- **Beginner track.** Use `mock_auth/` as your sign-in service. It runs on your laptop, issues real
-  signed tokens, and serves JWKS plus the discovery document, so you exercise the _exact_ `auth.py`
-  path with no account anywhere. This is how you prove the lock works in Concept 8.
-- **Standard track.** Use a real authorization server, hosted (Clerk, Auth0, Stytch) or self-hosted
-  (Better Auth). Point the three `AUTH_*`/`RESOURCE_URL` values at it. Standing up that real sign-in
-  is the **AI Identity** course; it is what a public, multi-user connector uses.
+**Live demo (auth off, public tunnel).** Set `AUTH_DISABLED=1`, start the gateway, and expose it
+over a free Cloudflare quick-tunnel; paste the resulting HTTPS URL into claude.ai → Settings →
+Connectors → *Add custom connector*. This demo path is single-user and open by design — it exists
+to see the whole app working inside a real chat host in one afternoon, with no host account and no
+sign-in service. Real multi-user OAuth against a live authorization server is the natural next step.
 
-Part 5 of this course needs neither: to see the whole app live inside claude.ai today, you set
-`AUTH_DISABLED=1` and expose the gateway with the `live-connector` skill (a free Cloudflare tunnel,
-no host, no card, no sign-in account). That demo is open and single-user; real sign-in is AI Identity.
+Configuration lives in `.env` (never committed); copy `.env.example` and fill it in.
 
-## Start the course
+---
 
-Open this folder in Claude Code or OpenCode and onboard the agent with the course's three short
-asks: "what can you do for me?", then "set up my base environment", then "explain this project and
-run its tests". The agent installs the skills, brings Neon and Context7 online, sets up `.env`, and
-shows you the five green checks. From there, every build step is a short prompt you paste; the agent
-writes the code, you review and verify. You direct; the agent types; you check.
+## Repository layout
+
+```
+src/connector_app/
+  server.py         the one FastMCP gateway: OAuth wiring, the session gate, the 7 tools
+  db.py             two-table Neon/psycopg persistence, keyed only by verified `sub`
+  config_store.py   the librarian's cooperative rules, persona, and fail-closed instruction
+  auth.py           the OAuth token check — the four checks (provided; wired, not rewritten)
+  session.py        the session-token primitive (provided; wired, not rewritten)
+seed/articles.json  the small read-only library
+tests/              five offline smoke tests over the security core
+mock_auth/          a local dev sign-in service for exercising the real auth path (never deployed)
+```
+
+## The four invariants it holds to
+
+1. **One gateway.** One MCP server, one public URL — a user adds a single connector.
+2. **Tools only.** No MCP resources or prompts for app logic.
+3. **Prove, don't trust.** Identity comes only from the verified token's `sub`, never from a tool
+   argument the model controls.
+4. **Fail closed.** If the session can't start or a tool errors, the app refuses — it never
+   improvises user state.
