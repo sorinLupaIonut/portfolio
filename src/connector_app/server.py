@@ -8,16 +8,24 @@ Tools are grouped only by an underscore name-prefix, because MCP tool names allo
 digits, `_` and `-` but never a dot. The prefix *is* the namespace:
 
     config_*  — liveness / rules (config_health is deliberately NOT session-gated)
-    domain_*  — the reading library (domain_get_item)
-    user_*    — per-person memory (added at Concept 10, behind the session gate)
+    domain_*  — the reading library (domain_get_item), behind the session gate
+    user_*    — per-person memory (the reader's shelf), behind the session gate
 
-OAuth (Concept 8) is now wired around the given `auth.py`. This server is an OAuth 2.1
-*resource server* only: a `RemoteAuthProvider` gates the MCP endpoint (an unauthenticated call
-gets HTTP 401) and publishes `/.well-known/oauth-protected-resource` (RFC 9728). The actual token
-check is NOT re-implemented here — the provider's token verifier delegates to `auth.verified_claims`,
-so auth.py's four checks (signature, issuer, audience, expiry) are exactly what accept or reject a
-token. We wire auth.py; we never duplicate it. The database and the session gate still arrive at
-Concept 10. `domain_get_item` reads real articles from `seed/articles.json`.
+OAuth (Concept 8) is wired around the given `auth.py`. This server is an OAuth 2.1 *resource
+server* only: a `RemoteAuthProvider` gates the MCP endpoint (an unauthenticated call gets HTTP 401)
+and publishes `/.well-known/oauth-protected-resource` (RFC 9728). The token check is NOT
+re-implemented here — the verifier delegates to `auth.verified_claims`, so auth.py's four checks
+(signature, issuer, audience, expiry) are exactly what accept or reject a token.
+
+The session contract (Concept 10) sits on top. `begin_session` is the front door: it reads the
+verified `sub` (from the OAuth token, or `DEV_SUB` under AUTH_DISABLED), ensures the reader's row,
+and hands back the librarian's rules + persona (from `config_store`), the reader's shelf (from
+`db`), and a fresh signed session token (from the given `session.py`). Every `domain_*`/`user_*`
+tool then requires that session token as its first argument — `require_session` at the top of the
+body, before any work — so the model is *structurally* forced to call `begin_session` first, and a
+call with no session fails closed (invariant 4). Identity is only ever the verified `sub`; no tool
+reads a `user_id` argument (invariant 3). Each real tool signs off with a one-line reminder to
+present its result in the librarian's voice, so the persona holds over a long conversation.
 
 The one escape hatch is `AUTH_DISABLED=1` (the Part 5 live demo, and only then): the auth provider
 is dropped entirely so the gateway is reachable over a tunnel with no sign-in. Never default it on.
@@ -40,9 +48,15 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.auth import TokenVerifier
+from fastmcp.server.dependencies import get_access_token
 from mcp.server.auth.provider import AccessToken
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl
+
+from connector_app import config_store, db
+
+# Import the session helpers by name so a tool's `session: str` argument does not shadow the module.
+from connector_app.session import SessionError, new_session_token, require_session
 
 # --- OAuth resource-server wiring (Concept 8) --------------------------------------------------
 # AUTH_DISABLED=1 is the Part 5 live-demo switch only: drop the auth layer so the gateway is open
@@ -98,6 +112,42 @@ _ARTICLES: dict[str, dict[str, Any]] = {
 }
 
 
+# --- identity + the session gate (Concept 10) --------------------------------------------------
+def _verified_sub() -> str:
+    """The one trusted identity for begin_session: the verified OAuth `sub`.
+
+    With auth on, the RemoteAuthProvider has already verified the token and sealed the `sub` into
+    the AccessToken; we just read it back — no second decode. Under AUTH_DISABLED=1 (Part 5 only)
+    there is no token, so we fall back to the fixed DEV_SUB. This is the ONLY place the auth-off
+    switch changes who the reader is; never default AUTH_DISABLED on.
+    """
+    if AUTH_DISABLED:
+        return os.environ["DEV_SUB"]
+    token = get_access_token()
+    if token is None:  # the provider gates /mcp, so this should be unreachable — fail closed anyway
+        raise ToolError("not authenticated")
+    return token.claims["sub"]
+
+
+def _gate(session: str) -> str:
+    """Require a valid session token and return the sub it carries, or fail closed.
+
+    This is the structural gate (invariant 4): every domain_*/user_* tool calls it first, before
+    any work, so a call with no (or a bad) session is refused instead of served. The `sub` comes
+    from the session token that begin_session minted from the verified OAuth `sub` — never from a
+    tool argument the model controls (invariant 3).
+    """
+    try:
+        return require_session(session)
+    except SessionError as e:
+        raise ToolError(str(e)) from e
+
+
+def _signed(payload: dict[str, Any]) -> dict[str, Any]:
+    """Append the librarian's one-line 'present it in my voice' sign-off to a tool result."""
+    return {**payload, "present": config_store.PRESENT_REMINDER}
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Health check",
@@ -116,23 +166,128 @@ def config_health() -> dict[str, Any]:
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Begin a reading-room session",
+        readOnlyHint=False,
+        openWorldHint=False,
+    )
+)
+def begin_session() -> dict[str, Any]:
+    """Check the reader in. Call this first — every other reading-room tool needs its token.
+
+    Reads the reader's identity from the verified OAuth `sub` (never from an argument), makes sure
+    they have a row, and hands back everything the model needs for the visit: the librarian's
+    cooperative rules and persona, the reader's own shelf, and a fresh signed session token to pass
+    to every domain_*/user_* call. The rules include the fail-closed instruction (invariant 4).
+    """
+    sub = _verified_sub()
+    db.ensure_user(sub)
+    state = db.read_state(sub)
+    return {
+        "rules": config_store.rules(),
+        "persona": config_store.persona(),
+        "state": state,
+        "session": new_session_token(sub),
+    }
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Get article by id",
         readOnlyHint=True,
         openWorldHint=False,
     )
 )
-def domain_get_item(id: str) -> dict[str, Any]:
-    """Fetch one library article by its id from the seed library.
+def domain_get_item(session: str, id: str) -> dict[str, Any]:
+    """Fetch one library article by its id from the seed library. Requires a session token.
 
-    Returns the article's id, title, topic and body. An unknown id raises rather than
-    inventing an article: fail closed (invariant 4) — the model never gets fabricated content.
-
-    The `session` gate (invariant 4) is added at Concept 10; today this is ungated.
+    Refuses without a valid session (invariant 4) — the gate runs before the lookup. An unknown id
+    raises rather than inventing an article: the model never gets fabricated content.
     """
+    _gate(session)
     article = _ARTICLES.get(id)
     if article is None:
         raise ToolError(f"no article with id {id!r}")
-    return article
+    return _signed(article)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Read the reader's shelf",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def user_get_state(session: str) -> dict[str, Any]:
+    """Return this reader's shelf: reading list, finished articles, and notes. Requires a session.
+
+    Identity is the `sub` inside the session token, never an argument (invariant 3).
+    """
+    sub = _gate(session)
+    return _signed({"state": db.read_state(sub)})
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Save an article to the reading list",
+        readOnlyHint=False,
+        openWorldHint=False,
+    )
+)
+def user_save_article(session: str, article_id: str) -> dict[str, Any]:
+    """Add a library article to this reader's reading list. Requires a session.
+
+    Validates the article exists in the library before saving (fail closed — no phantom ids). The
+    reader is the `sub` in the session token; the write is a read-modify-write of their one state doc.
+    """
+    sub = _gate(session)
+    if article_id not in _ARTICLES:
+        raise ToolError(f"no article with id {article_id!r}")
+    state = db.read_state(sub)
+    if article_id not in state["reading_list"]:
+        state["reading_list"].append(article_id)
+    return _signed({"state": db.save_state(sub, state)})
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Mark an article finished",
+        readOnlyHint=False,
+        openWorldHint=False,
+    )
+)
+def user_mark_read(session: str, article_id: str) -> dict[str, Any]:
+    """Mark a library article as finished for this reader. Requires a session.
+
+    Validates the article exists first. Identity is the session `sub`, never an argument.
+    """
+    sub = _gate(session)
+    if article_id not in _ARTICLES:
+        raise ToolError(f"no article with id {article_id!r}")
+    state = db.read_state(sub)
+    if article_id not in state["finished"]:
+        state["finished"].append(article_id)
+    return _signed({"state": db.save_state(sub, state)})
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set a note on an article",
+        readOnlyHint=False,
+        openWorldHint=False,
+    )
+)
+def user_set_note(session: str, article_id: str, note: str) -> dict[str, Any]:
+    """Attach (or replace) this reader's note on a library article. Requires a session.
+
+    Validates the article exists first. The note is stored under the reader's `sub`, never an id
+    the model named (invariant 3).
+    """
+    sub = _gate(session)
+    if article_id not in _ARTICLES:
+        raise ToolError(f"no article with id {article_id!r}")
+    state = db.read_state(sub)
+    state["notes"][article_id] = note
+    return _signed({"state": db.save_state(sub, state)})
 
 
 if __name__ == "__main__":
