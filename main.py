@@ -12,7 +12,9 @@ from agents.sandbox.sandboxes.docker import DockerSandboxClient, DockerSandboxCl
 from docker import from_env as docker_from_env
 from dotenv import load_dotenv
 
-MODEL = "gpt-5-mini"
+# Sandbox capabilities need custom tools, which only the gpt-5 family accepts:
+# anything older (gpt-4.1-mini and friends) fails with a 400 on `tools`.
+DEFAULT_MODEL = "gpt-5-mini"
 
 # UnixLocalSandboxClient is macOS/Linux only, so this base runs the sandbox in Docker.
 SANDBOX_IMAGE = "python:3.14-slim"
@@ -34,10 +36,10 @@ def ensure_docker_cli_on_path() -> None:
         os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
 
 
-def build_agent() -> SandboxAgent[None]:
+def build_agent(model: str) -> SandboxAgent[None]:
     return SandboxAgent(
         name="Worker",
-        model=MODEL,
+        model=model,
         instructions="You are a helpful assistant. Answer briefly and plainly.",
     )
 
@@ -48,7 +50,8 @@ async def main() -> None:
     if not os.getenv("OPENAI_API_KEY"):
         sys.exit("OPENAI_API_KEY is not set. Put it in .env and try again.")
 
-    agent = build_agent()
+    model = os.getenv("AGENT_MODEL", DEFAULT_MODEL)
+    agent = build_agent(model)
     run_config = RunConfig(
         sandbox=SandboxRunConfig(
             client=DockerSandboxClient(docker_from_env()),
@@ -57,7 +60,7 @@ async def main() -> None:
         workflow_name="Digital FTE chat",
     )
 
-    print(f"Chat with the Worker ({MODEL}). Type 'exit' to quit.\n")
+    print(f"Chat with the Worker ({model}). Type 'exit' to quit.\n")
     while True:
         try:
             message = input("you > ").strip()
