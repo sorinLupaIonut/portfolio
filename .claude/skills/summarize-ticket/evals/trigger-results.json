@@ -1,0 +1,290 @@
+{
+  "exit_reason": "all_passed (iteration 1)",
+  "original_description": "Turns one support ticket or thread into a five-section handoff note \u2014 Customer Context, Issue, Resolution Steps Taken, Current Status, Recommended Next Action \u2014 so a colleague can pick the case up cold. Use whenever someone needs to hand a case off, brief a lead, take over another agent's thread, catch up on where a case stands, or establish the current state before escalating, including phrasings that never say \"summarize\": \"write a handoff note for #4471\", \"TL;DR this thread\", \"where does this stand before I escalate\", \"what's the story on 1042\", \"bring me up to speed on Sam's case\". Do not use it for drafting a reply to the customer, for triaging or ranking a batch of tickets, or for reporting on ticket volume, trends, or metrics.",
+  "best_description": "Turns one support ticket or thread into a five-section handoff note \u2014 Customer Context, Issue, Resolution Steps Taken, Current Status, Recommended Next Action \u2014 so a colleague can pick the case up cold. Use whenever someone needs to hand a case off, brief a lead, take over another agent's thread, catch up on where a case stands, or establish the current state before escalating, including phrasings that never say \"summarize\": \"write a handoff note for #4471\", \"TL;DR this thread\", \"where does this stand before I escalate\", \"what's the story on 1042\", \"bring me up to speed on Sam's case\". Do not use it for drafting a reply to the customer, for triaging or ranking a batch of tickets, or for reporting on ticket volume, trends, or metrics.",
+  "best_score": "8/8",
+  "best_train_score": "12/12",
+  "best_test_score": "8/8",
+  "final_description": "Turns one support ticket or thread into a five-section handoff note \u2014 Customer Context, Issue, Resolution Steps Taken, Current Status, Recommended Next Action \u2014 so a colleague can pick the case up cold. Use whenever someone needs to hand a case off, brief a lead, take over another agent's thread, catch up on where a case stands, or establish the current state before escalating, including phrasings that never say \"summarize\": \"write a handoff note for #4471\", \"TL;DR this thread\", \"where does this stand before I escalate\", \"what's the story on 1042\", \"bring me up to speed on Sam's case\". Do not use it for drafting a reply to the customer, for triaging or ranking a batch of tickets, or for reporting on ticket volume, trends, or metrics.",
+  "iterations_run": 1,
+  "holdout": 0.4,
+  "train_size": 12,
+  "test_size": 8,
+  "history": [
+    {
+      "iteration": 1,
+      "description": "Turns one support ticket or thread into a five-section handoff note \u2014 Customer Context, Issue, Resolution Steps Taken, Current Status, Recommended Next Action \u2014 so a colleague can pick the case up cold. Use whenever someone needs to hand a case off, brief a lead, take over another agent's thread, catch up on where a case stands, or establish the current state before escalating, including phrasings that never say \"summarize\": \"write a handoff note for #4471\", \"TL;DR this thread\", \"where does this stand before I escalate\", \"what's the story on 1042\", \"bring me up to speed on Sam's case\". Do not use it for drafting a reply to the customer, for triaging or ranking a batch of tickets, or for reporting on ticket volume, trends, or metrics.",
+      "train_passed": 12,
+      "train_failed": 0,
+      "train_total": 12,
+      "train_results": [
+        {
+          "query": "I need a structured handoff for the support thread on order SO-10233. The customer is Pro tier and the case is going to our APAC team overnight, so include what we've already tried and they don't need to repeat.",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "our head of CS wants a one-pager on the priya raman refund case for the monday review. she needs to be able to pick it up cold without reading 40 messages",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "hey can u catch me up on tikcet #3901, im covering for lee til thursday and this ones the messiest thing in the queue",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "whats the story on 1042? customer just called the main line asking for an update and i have literally no context on it",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "im off at 5 and this one isnt closing today. write a handoff note for #4471 so whoever picks it up tomorrow isnt starting from zero",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "ok the thread on ticket 3390 is 22 messages long and my lead just asked me about it in standup in 10 min. tldr this thread",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "here are the 30 open tickets that came in over the weekend (csv in my downloads, tickets_mar09.csv). which ones are urgent and which can wait til monday?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "whats the order number on ticket 4471?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "tldr this slack thread in #pricing, its 60 messages about whether we're grandfathering the legacy plans and i cant tell what was decided",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "draft a reply to sam ortega on ticket 5012 apologizing for the delay and offering the expedited replacement. keep it warm but short",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "write a handoff note for the deploy im halfway through - migration is applied to main but the worker isnt restarted yet and the mcp server is still on the old config",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "close ticket 3390 and mark it resolved, the customer confirmed on the phone that the pre-auth hold dropped off yesterday",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ],
+      "test_passed": 8,
+      "test_failed": 0,
+      "test_total": 8,
+      "test_results": [
+        {
+          "query": "i'm about to escalate ticket 4477 to the billing specialists. package up where it stands first so they aren't asking me questions for an hour",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "taking over sam ortega's case from dana who's out sick this week. bring me up to speed on sam's case, its ticket 5012 about the cracked riser arm",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "before i kick this up to tier 2 i need to know where does this stand. ticket #4429, the double charge one with marcus bell",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "can you write up ticket 2288 in that five section format we use - customer context, issue, what we tried, current status, next action",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "summarize this 15 page vendor contract in ~/Documents/acme-msa-2026.pdf, i mainly need the termination clauses and the SLA penalties",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "customer says their package arrived completely empty, just packing material. have we seen this before? pull up similar resolved tickets and what fixed them",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "how many tickets did we close last week vs the week before, and what was the average time to resolution? need it for the QBR deck",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "whats our refund policy for items damaged in transit? customer is asking and i want to get it right before i answer",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ],
+      "passed": 12,
+      "failed": 0,
+      "total": 12,
+      "results": [
+        {
+          "query": "I need a structured handoff for the support thread on order SO-10233. The customer is Pro tier and the case is going to our APAC team overnight, so include what we've already tried and they don't need to repeat.",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "our head of CS wants a one-pager on the priya raman refund case for the monday review. she needs to be able to pick it up cold without reading 40 messages",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "hey can u catch me up on tikcet #3901, im covering for lee til thursday and this ones the messiest thing in the queue",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "whats the story on 1042? customer just called the main line asking for an update and i have literally no context on it",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "im off at 5 and this one isnt closing today. write a handoff note for #4471 so whoever picks it up tomorrow isnt starting from zero",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "ok the thread on ticket 3390 is 22 messages long and my lead just asked me about it in standup in 10 min. tldr this thread",
+          "should_trigger": true,
+          "trigger_rate": 1.0,
+          "triggers": 3,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "here are the 30 open tickets that came in over the weekend (csv in my downloads, tickets_mar09.csv). which ones are urgent and which can wait til monday?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "whats the order number on ticket 4471?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "tldr this slack thread in #pricing, its 60 messages about whether we're grandfathering the legacy plans and i cant tell what was decided",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "draft a reply to sam ortega on ticket 5012 apologizing for the delay and offering the expedited replacement. keep it warm but short",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "write a handoff note for the deploy im halfway through - migration is applied to main but the worker isnt restarted yet and the mcp server is still on the old config",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "close ticket 3390 and mark it resolved, the customer confirmed on the phone that the pre-auth hold dropped off yesterday",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ]
+    }
+  ]
+}
