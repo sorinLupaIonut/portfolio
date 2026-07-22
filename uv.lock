@@ -211,13 +211,13 @@ name = "digital-fte"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "openai-agents" },
+    { name = "openai-agents", extra = ["docker"] },
     { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "openai-agents", specifier = ">=0.18.3" },
+    { name = "openai-agents", extras = ["docker"], specifier = ">=0.18.3" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
 ]
 
@@ -228,6 +228,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
+name = "docker"
+version = "7.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/7f/731ff914b0255d3d065f45fd4e626d4b8c95dbcbaada049f337a6ac16410/docker-7.2.0.tar.gz", hash = "sha256:cebb93773d334f778e023a7ee352a8d6e13ab1bd3b863a4d4a59dec897df43ac", size = 118731, upload-time = "2026-07-09T14:53:46.39Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/23/529140fe1aab80fc6992f93a706deec709140a6397439139a054e1515c45/docker-7.2.0-py3-none-any.whl", hash = "sha256:a3f45fdeb9165e2d25d9a1d02ddf3bc70fb572cf5ebbf9b58558c22caf29b71f", size = 148775, upload-time = "2026-07-09T14:53:45.224Z" },
 ]
 
 [[package]]
@@ -417,6 +431,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/80/3f/b1162cad8720fafc9cf658d6896027385967f5006adfb92ae0dab2b54a70/openai_agents-0.18.3.tar.gz", hash = "sha256:e637f5f5a50692ccbedb0e4f7f2e4f8e2facfcddd41142f35faf90c89b700fc3", size = 5577652, upload-time = "2026-07-17T03:40:25.208Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/7c/08b9929a15131081898e38c5612d44ee293851d5c80f31ca1153efe82143/openai_agents-0.18.3-py3-none-any.whl", hash = "sha256:c6ed971fdeb34d39a9931787bd3960c1e84dc5d7345705794cc5cab8a1158d07", size = 880799, upload-time = "2026-07-17T03:40:23.163Z" },
+]
+
+[package.optional-dependencies]
+docker = [
+    { name = "docker" },
 ]
 
 [[package]]
