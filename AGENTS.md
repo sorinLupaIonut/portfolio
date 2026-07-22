@@ -12,6 +12,12 @@ The human is a learner, not a client: plan before you build, explain in plain la
 
 This folder is a bare base, not a project: no `src/`, no pinned dependencies. You construct everything below on top of it. Confirm any OpenAI Agents SDK, MCP, or pgvector API through Context7 before you write it. This file pins no versions; when Context7 disagrees with it, Context7 wins.
 
+## Rules (the three that must hold; the long list is at the end of this file)
+
+- **Business data moves only through the `customer-data` MCP server.** In the Part 4 build the running Worker never issues raw SQL against business tables; it calls a scoped tool. The Quick Win's single `@function_tool` is the one deliberate exception, and it is scoped just as narrowly.
+- **The audit log gets its own direct database connection, and the action and its audit row commit together.** Audit runs on its own `asyncpg` pool, never through the MCP boundary it audits; the audit write sits inside the action's transaction, so both land or neither does.
+- **Embeddings use the same model to store and to search.** `text-embedding-3-small` into `VECTOR(1536)`, on insert and on query alike. A mismatch does not raise; it returns plausible nonsense.
+
 ## What you are building
 
 A basic chat agent becomes an **AI Worker** through two moves, plus the wire between them:
