@@ -1,0 +1,9 @@
+# Keep LF in the working tree, not just in the repo.
+#
+# With core.autocrlf=true (the Git for Windows default) a checkout rewrites these
+# to CRLF. A skill's SKILL.md frontmatter was observed to parse wrong that way:
+# the skill registered under its H1 instead of its description, and the description
+# is the only surface the model reads to decide whether to fire the skill. It fails
+# silently, so pin the endings rather than rely on noticing.
+*.md   text eol=lf
+*.json text eol=lf
