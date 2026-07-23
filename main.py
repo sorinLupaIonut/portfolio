@@ -5,13 +5,19 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from agents import Runner
 from agents.extensions.memory import SQLAlchemySession
 from agents.run import RunConfig
 from agents.sandbox import SandboxAgent, SandboxRunConfig
-from agents.sandbox.capabilities import Capabilities, LocalDirLazySkillSource, Skills
+from agents.sandbox.capabilities import (
+    Capabilities,
+    LocalDirLazySkillSource,
+    SkillMetadata,
+    Skills,
+)
 from agents.sandbox.entries import LocalDir
 from agents.sandbox.sandboxes.docker import (
     DockerSandboxClient,
@@ -33,6 +39,28 @@ SANDBOX_IMAGE = "python:3.14-slim"
 # worker has to be started from the project root. An absolute path that points at
 # nothing loads zero skills without raising, which is the worst way for this to fail.
 SKILLS_DIR = Path(".claude/skills")
+
+# The same folder also holds the skills the *build* agent uses (skill-creator,
+# mcp-builder, neon-postgres). Those are development-plane tools -- neon-postgres in
+# particular teaches direct Postgres access, which is what the Worker must never do --
+# so name the Worker's own skills instead of shipping whatever is in the directory.
+# An allowlist fails safe: a build-time skill installed later cannot leak into runtime.
+WORKER_SKILLS = frozenset({"summarize-ticket", "find-similar-cases", "escalate-with-context"})
+
+
+class WorkerSkillSource(LocalDirLazySkillSource):
+    """A lazy skill source that exposes only the skills the Worker owns.
+
+    The capability has no include/exclude of its own, and filtering the index here
+    also covers load_skill, which resolves names through this same list.
+    """
+
+    names: frozenset[str]
+
+    def list_skill_metadata(self, **kwargs: Any) -> list[SkillMetadata]:
+        return [
+            skill for skill in super().list_skill_metadata(**kwargs) if skill.name in self.names
+        ]
 
 
 def disable_sandbox_pty() -> None:
@@ -95,7 +123,13 @@ def build_agent(model: str) -> SandboxAgent[None]:
         # lazy_from reads each SKILL.md's metadata up front but copies a skill's
         # files into the sandbox only when the model actually asks for it.
         capabilities=Capabilities.default()
-        + [Skills(lazy_from=LocalDirLazySkillSource(source=LocalDir(src=SKILLS_DIR)))],
+        + [
+            Skills(
+                lazy_from=WorkerSkillSource(
+                    source=LocalDir(src=SKILLS_DIR), names=WORKER_SKILLS
+                )
+            )
+        ],
     )
 
 
