@@ -4,12 +4,15 @@ import asyncio
 import os
 import sys
 import uuid
+from collections.abc import Sequence
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from agents import Runner
 from agents.extensions.memory import SQLAlchemySession
+from agents.mcp import MCPServer, MCPServerStreamableHttp
 from agents.run import RunConfig
 from agents.sandbox import SandboxAgent, SandboxRunConfig
 from agents.sandbox.capabilities import (
@@ -46,6 +49,10 @@ SKILLS_DIR = Path(".claude/skills")
 # so name the Worker's own skills instead of shipping whatever is in the directory.
 # An allowlist fails safe: a build-time skill installed later cannot leak into runtime.
 WORKER_SKILLS = frozenset({"summarize-ticket", "find-similar-cases", "escalate-with-context"})
+
+# The scoped customer-data server: a separate process the Worker reaches by URL,
+# not a subprocess it spawns. It has to be running first -- see its README.
+CUSTOMER_DATA_URL = os.getenv("CUSTOMER_DATA_URL", "http://127.0.0.1:8000/mcp")
 
 
 class WorkerSkillSource(LocalDirLazySkillSource):
@@ -117,13 +124,45 @@ def to_asyncpg_url(url: str) -> str:
     return urlunsplit(("postgresql+asyncpg", parsed.netloc, parsed.path, urlencode(query), ""))
 
 
-def build_agent(model: str) -> SandboxAgent[None]:
+def connect_customer_data() -> MCPServerStreamableHttp:
+    """The Worker's only route to business data.
+
+    Not connected here -- the caller enters it as an async context manager, and
+    the connection has to outlive every turn of the chat loop.
+    """
+    return MCPServerStreamableHttp(
+        name="customer-data",
+        params={"url": CUSTOMER_DATA_URL},
+        # The three tools never change while the server is up, so fetching the
+        # list once instead of on every run saves a round trip per turn.
+        cache_tools_list=True,
+        # The default is 5s, and one call there does an OpenAI embedding request
+        # plus a Neon query. A timeout that fires mid-write is worse than a slow
+        # answer: the client gives up while the server is still committing.
+        client_session_timeout_seconds=30,
+        # max_retry_attempts stays at 0 deliberately. issue_refund moves money,
+        # and a retry after a response is lost in transit pays twice. A failed
+        # refund the human can see beats a silent double refund.
+    )
+
+
+def build_agent(model: str, mcp_servers: Sequence[MCPServer]) -> SandboxAgent[None]:
     return SandboxAgent(
         name="Worker",
         model=model,
+        mcp_servers=list(mcp_servers),
         instructions=(
             "You are a customer-support Worker. Be accurate and concise, and never "
-            "invent customer, order, or ticket details you were not given.\n\n"
+            "invent customer, order, or ticket details you were not given -- the "
+            "customer-data tools are your only route to that data.\n\n"
+            # Without the second sentence the model stalls on identifiers: told to
+            # look things up, it reaches for lookup_customer, finds it needs a UUID
+            # nobody has, and asks for one instead of searching. Measured: it went
+            # straight to asking for ids in 1 of 4 runs, calling no tool at all.
+            "When someone describes a problem, search past resolved cases before "
+            "doing anything else. Do that even when you have no ids: the search "
+            "takes a description, not an id. Ask for identifiers only after you "
+            "have searched, and only for the step that actually needs one.\n\n"
             # load_skill returns {'status': 'loaded'} and nothing else, which reads like
             # the skill is now in effect. It is not: it only copied files. Without this
             # the model sometimes answers straight from the index description, which
@@ -161,7 +200,6 @@ async def main() -> None:
         sys.exit(f"No skills at {SKILLS_DIR}. Start the worker from the project root.")
 
     model = os.getenv("AGENT_MODEL", DEFAULT_MODEL)
-    agent = build_agent(model)
     run_config = RunConfig(
         sandbox=SandboxRunConfig(
             client=DockerSandboxClient(docker_from_env()),
@@ -175,24 +213,42 @@ async def main() -> None:
     engine = create_async_engine(to_asyncpg_url(database_url))
     session = SQLAlchemySession(session_id, engine=engine, create_tables=True)
 
-    print(f"Chat with the Worker ({model}). Type 'exit' to quit.")
-    print(f"session: {session_id}\n")
-    try:
-        while True:
-            # input() blocks the event loop, and Neon's pooler drops the idle
-            # connection while it is blocked; the next turn then fails mid-write.
-            try:
-                message = (await asyncio.to_thread(input, "you > ")).strip()
-            except EOFError:
-                break
-            if not message:
-                continue
-            if message.lower() in {"exit", "quit"}:
-                break
-            result = await Runner.run(agent, message, run_config=run_config, session=session)
-            print(f"worker > {result.final_output}\n")
-    finally:
-        await engine.dispose()
+    async with AsyncExitStack() as stack:
+        try:
+            customer_data = await stack.enter_async_context(connect_customer_data())
+        except Exception as error:
+            # Worth catching rather than letting the raw connection error out:
+            # a stopped server and a broken one look identical in the traceback,
+            # and the fix for the common case is "start the other terminal".
+            sys.exit(
+                f"Could not reach the customer-data server at {CUSTOMER_DATA_URL}\n"
+                f"  {type(error).__name__}: {error}\n\n"
+                f"It is a separate process and has to be running first:\n"
+                f"  uv run python customer-data-mcp/server.py"
+            )
+
+        tool_names = [tool.name for tool in await customer_data.list_tools()]
+        agent = build_agent(model, [customer_data])
+
+        print(f"Chat with the Worker ({model}). Type 'exit' to quit.")
+        print(f"session    : {session_id}")
+        print(f"mcp tools  : {', '.join(tool_names)}\n")
+        try:
+            while True:
+                # input() blocks the event loop, and Neon's pooler drops the idle
+                # connection while it is blocked; the next turn then fails mid-write.
+                try:
+                    message = (await asyncio.to_thread(input, "you > ")).strip()
+                except EOFError:
+                    break
+                if not message:
+                    continue
+                if message.lower() in {"exit", "quit"}:
+                    break
+                result = await Runner.run(agent, message, run_config=run_config, session=session)
+                print(f"worker > {result.final_output}\n")
+        finally:
+            await engine.dispose()
 
 
 if __name__ == "__main__":
