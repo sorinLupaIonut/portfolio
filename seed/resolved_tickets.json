@@ -1,7 +1,7 @@
 {
   "generated_at": "2026-07-23T09:41:00+00:00",
   "model": "claude-fable-5 (authored in-session by Claude Code; SDK path remains in generate_tickets.py)",
-  "count": 16,
+  "count": 17,
   "tickets": [
     {
       "category": "refund",
@@ -30,6 +30,13 @@
       "summary": "Asks refund of price difference after monitor dropped $60 in a sale",
       "body": "The monitor I bought on 2026-07-08 for $299.00 (order ORD-64415) is now listed at $239.00 in your summer sale, one week later. I'd like the $60.00 difference refunded, since I would obviously have waited had I known.",
       "resolution": "Price-adjustment refund refused as out of policy, which covers only drops within 48 hours of purchase; the customer was offered a 10% coupon on a future order and took it, though they noted they were unhappy with the policy."
+    },
+    {
+      "category": "refund",
+      "customer_email": "nadia.oyelaran@example.net",
+      "summary": "Refund approved two weeks ago has still not reached the customer's card",
+      "body": "You approved a refund of $162.30 on order ORD-59741 on 2026-06-28 and told me it would be back on my card within five business days, but fourteen days later there is still nothing. My bank says they have no pending credit from you at all, and at this point I have waited longer for the money than I waited for the item itself.",
+      "resolution": "The refund had failed silently at the processor because the card used for the original purchase had expired in the meantime; it was re-issued against the customer's replacement card once she confirmed the last four digits, posted within two business days, and a $15 credit was added for the delay."
     },
     {
       "category": "login",
