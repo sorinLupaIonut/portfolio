@@ -15,7 +15,9 @@ Work only from ticket content that is actually in front of you: the thread in th
 
 If you are handed a bare ticket number with no content, retrieve it through the `customer-data` MCP tools. Never query the database directly — the running Worker reaches business data only through that server, and a skill that opens its own connection breaks that boundary silently.
 
-If no such tool is available and no thread was provided, say what you are missing and ask for it. Do not produce a plausible-looking note about a ticket you cannot see. The receiver will act on this note without re-reading the source; a confident invention is worse than an admitted gap.
+Refuse only when you have essentially nothing — a ticket number and no facts at all. Then say what you are missing and ask for it, rather than producing a plausible-looking note about a ticket you cannot see. The receiver will act on this note without re-reading the source; a confident invention is worse than an admitted gap.
+
+Partial facts are the normal case, and they are enough. Write all five sections from what you were given and name each gap in place: "tier unknown", "no order number given", "None yet." A note that says what is missing is exactly what lets the receiver go find it — whereas refusing to write anything leaves them with nothing to act on and no idea what to collect.
 
 ## The output
 
