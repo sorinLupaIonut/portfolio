@@ -58,9 +58,16 @@ class WorkerSkillSource(LocalDirLazySkillSource):
     names: frozenset[str]
 
     def list_skill_metadata(self, **kwargs: Any) -> list[SkillMetadata]:
-        return [
-            skill for skill in super().list_skill_metadata(**kwargs) if skill.name in self.names
-        ]
+        found = {skill.name: skill for skill in super().list_skill_metadata(**kwargs)}
+        # A name that matches nothing would just drop that skill from the index, and a
+        # skill missing from the index can never fire -- with no error anywhere. Since
+        # the point of naming them is to be explicit, say so instead of shipping short.
+        if missing := sorted(self.names - found.keys()):
+            raise ValueError(
+                f"Named skills not found in {self.source.src}: {', '.join(missing)}. "
+                f"Present: {', '.join(sorted(found)) or '(none)'}"
+            )
+        return [found[name] for name in sorted(self.names)]
 
 
 def disable_sandbox_pty() -> None:
