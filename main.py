@@ -11,6 +11,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from agents import Runner
+from agents.exceptions import (
+    InputGuardrailTripwireTriggered,
+    OutputGuardrailTripwireTriggered,
+    ToolInputGuardrailTripwireTriggered,
+    ToolOutputGuardrailTripwireTriggered,
+)
 from agents.extensions.memory import SQLAlchemySession
 from agents.mcp import MCPServer, MCPServerStreamableHttp
 from agents.run import RunConfig
@@ -30,6 +36,15 @@ from agents.sandbox.sandboxes.docker import (
 from docker import from_env as docker_from_env
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine
+
+from audit import (
+    ACTION_GUARDRAIL_TRIPPED,
+    ACTION_MESSAGE_RECEIVED,
+    ACTION_MESSAGE_SENT,
+    AuditHooks,
+    AuditLog,
+)
+from guardrails import no_card_numbers, redact_card_numbers
 
 # Sandbox capabilities need custom tools, which only the gpt-5 family accepts:
 # anything older (gpt-4.1-mini and friends) fails with a 400 on `tools`.
@@ -172,6 +187,10 @@ def build_agent(model: str, mcp_servers: Sequence[MCPServer]) -> SandboxAgent[No
             "SKILL.md before you answer. The description you picked the skill from is a "
             "routing summary; the instructions you have to follow are in the file."
         ),
+        # Deterministic and free: no model call, so it cannot drift or add latency.
+        # Tripping raises out of Runner.run before the model is invoked, which is
+        # the point -- a pasted card number never reaches OpenAI or the session store.
+        input_guardrails=[no_card_numbers],
         # Capabilities REPLACE the defaults rather than extending them, so the
         # filesystem and shell the sandbox relies on have to be carried along.
         # lazy_from reads each SKILL.md's metadata up front but copies a skill's
@@ -189,6 +208,11 @@ def build_agent(model: str, mcp_servers: Sequence[MCPServer]) -> SandboxAgent[No
 
 async def main() -> None:
     load_dotenv()
+    # The Windows console defaults to cp1252, and the model reaches for characters
+    # it cannot encode (non-breaking hyphens, curly quotes). Printing one raises
+    # UnicodeEncodeError and takes down a turn whose work already succeeded.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     ensure_docker_cli_on_path()
     disable_sandbox_pty()
     if not os.getenv("OPENAI_API_KEY"):
@@ -210,7 +234,19 @@ async def main() -> None:
 
     # Pass SESSION_ID to resume an earlier conversation; otherwise every run is a new one.
     session_id = os.getenv("SESSION_ID") or f"cli-{uuid.uuid4()}"
-    engine = create_async_engine(to_asyncpg_url(database_url))
+    engine = create_async_engine(
+        to_asyncpg_url(database_url),
+        # A chat loop idles for as long as the human takes to read and reply, and
+        # Neon's pooler closes an idle connection well inside that. Without a
+        # pre-ping, SQLAlchemy hands the next turn a connection the server has
+        # already dropped, and the turn dies on "connection is closed" -- after
+        # message_received is written, so the conversation ends mid-trace.
+        # to_thread keeps the event loop alive during input(); it cannot keep a
+        # socket alive. This is the part that does.
+        pool_pre_ping=True,
+        # Belt and braces: retire connections before the pooler decides to.
+        pool_recycle=300,
+    )
     session = SQLAlchemySession(session_id, engine=engine, create_tables=True)
 
     async with AsyncExitStack() as stack:
@@ -230,9 +266,20 @@ async def main() -> None:
         tool_names = [tool.name for tool in await customer_data.list_tools()]
         agent = build_agent(model, [customer_data])
 
+        # Startup is the one place an audit failure is allowed to be fatal: a
+        # Worker that cannot write its ledger should not take a customer's turn
+        # at all. Once the loop is running the rule inverts -- see AuditHooks.
+        audit = await stack.enter_async_context(AuditLog(database_url, session_id))
+        await audit.ensure_conversation(
+            user_id=os.getenv("WORKER_USER_ID", "cli-user"),
+            metadata={"model": model, "interface": "cli"},
+        )
+        hooks = AuditHooks(audit, mcp_tool_names=set(tool_names))
+
         print(f"Chat with the Worker ({model}). Type 'exit' to quit.")
         print(f"session    : {session_id}")
-        print(f"mcp tools  : {', '.join(tool_names)}\n")
+        print(f"mcp tools  : {', '.join(tool_names)}")
+        print(f"audited    : load_skill, {', '.join(tool_names)}\n")
         try:
             while True:
                 # input() blocks the event loop, and Neon's pooler drops the idle
@@ -245,9 +292,55 @@ async def main() -> None:
                     continue
                 if message.lower() in {"exit", "quit"}:
                     break
-                result = await Runner.run(agent, message, run_config=run_config, session=session)
+
+                # Redacted before storage, not after: this row is written before
+                # Runner.run, so the guardrail has not run yet. Without redaction
+                # the audit log would keep a verbatim copy of the very thing the
+                # guardrail exists to block.
+                await audit.record_action(
+                    ACTION_MESSAGE_RECEIVED,
+                    payload={"message": redact_card_numbers(message)},
+                )
+                try:
+                    result = await Runner.run(
+                        agent, message, run_config=run_config, session=session, hooks=hooks
+                    )
+                except (
+                    InputGuardrailTripwireTriggered,
+                    OutputGuardrailTripwireTriggered,
+                    ToolInputGuardrailTripwireTriggered,
+                    ToolOutputGuardrailTripwireTriggered,
+                ) as tripped:
+                    # A trip is an exception, not a hook -- this except block is
+                    # the only place the row can be written. The turn ends here,
+                    # so it deliberately produces no message_sent.
+                    await audit.record_action(
+                        ACTION_GUARDRAIL_TRIPPED,
+                        target=type(tripped).__name__,
+                        payload={"detail": str(tripped)},
+                    )
+                    print(
+                        "worker > I can't accept card numbers in chat. "
+                        "Please remove it and describe the problem instead.\n"
+                    )
+                    continue
+
+                await audit.record_action(
+                    ACTION_MESSAGE_SENT,
+                    payload={"model": model},
+                    result={"message": redact_card_numbers(str(result.final_output))},
+                )
                 print(f"worker > {result.final_output}\n")
         finally:
+            # In a finally block, so an exception here would replace whatever
+            # actually went wrong with a misleading one. Closing the row is the
+            # least important thing happening at this point.
+            try:
+                await audit.close_conversation()
+            except Exception as error:  # noqa: BLE001
+                audit.warn("close_conversation", error)
+            if audit.failures:
+                print(f"\n{audit.failures} audit write(s) failed this session.", file=sys.stderr)
             await engine.dispose()
 
 
