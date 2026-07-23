@@ -123,7 +123,15 @@ def build_agent(model: str) -> SandboxAgent[None]:
         model=model,
         instructions=(
             "You are a customer-support Worker. Be accurate and concise, and never "
-            "invent customer, order, or ticket details you were not given."
+            "invent customer, order, or ticket details you were not given.\n\n"
+            # load_skill returns {'status': 'loaded'} and nothing else, which reads like
+            # the skill is now in effect. It is not: it only copied files. Without this
+            # the model sometimes answers straight from the index description, which
+            # names the output's sections but carries none of the rules behind them.
+            "load_skill only copies a skill's files into the workspace. It tells you "
+            "nothing about what the skill says, so after calling it, read that skill's "
+            "SKILL.md before you answer. The description you picked the skill from is a "
+            "routing summary; the instructions you have to follow are in the file."
         ),
         # Capabilities REPLACE the defaults rather than extending them, so the
         # filesystem and shell the sandbox relies on have to be carried along.
