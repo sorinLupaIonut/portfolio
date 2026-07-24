@@ -44,9 +44,15 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 # exactly the tickets a support agent most needs to know about.
 OPEN_TICKET_STATUSES = ("open", "pending", "escalated")
 
-# Written to refunds.issued_by and audit_log.actor. It is this server acting;
-# there is no caller identity to record until the Worker passes one.
+# Written to refunds.issued_by and audit_log.actor: it is this server that acted.
+# Which conversation it acted for is a separate question, answered by the
+# conversation_id carried on the request -- see _conversation_id below.
 ACTOR = "customer-data-mcp"
+
+# The `_meta` key the Worker sends its session_id under. Out-of-band on purpose:
+# not a tool argument, so the model never sees it and cannot omit it, invent one,
+# or be persuaded to forge another conversation's id.
+META_CONVERSATION_ID = "conversation_id"
 
 HOST = os.getenv("CUSTOMER_DATA_HOST", "127.0.0.1")
 PORT = int(os.getenv("CUSTOMER_DATA_PORT", "8000"))
@@ -115,9 +121,48 @@ def _ctx(ctx: Context) -> AppContext:
     return ctx.request_context.lifespan_context
 
 
+def _conversation_id(ctx: Context) -> str | None:
+    """The calling Worker's session_id, carried on the MCP request's `_meta`.
+
+    None for any other caller -- MCP Inspector, curl, a second service -- and
+    that is legitimate rather than an error: the rows are simply written
+    unlinked, exactly as they were before the Worker started sending this.
+    """
+    meta = ctx.request_context.meta
+    value = getattr(meta, META_CONVERSATION_ID, None) if meta else None
+    return str(value) if value else None
+
+
+async def _resolve_conversation(
+    conn: asyncpg.Connection, conversation_id: str | None
+) -> str | None:
+    """Return the id only if that conversation really exists, else None.
+
+    Both columns this feeds are foreign keys to conversations(session_id), and
+    they are written inside issue_refund's transaction. An id with no matching
+    row would fail the INSERT and roll the refund back with it -- so a mistake
+    in the audit wiring would block a payment. Degrading to an unlinked row is
+    the lesser failure; the warning is what keeps it from being a silent one.
+    """
+    if conversation_id is None:
+        return None
+    exists = await conn.fetchval(
+        "SELECT 1 FROM conversations WHERE session_id = $1", conversation_id
+    )
+    if exists:
+        return conversation_id
+    print(
+        f"warning: no conversations row for {conversation_id!r}; writing this "
+        f"refund and its audit rows unlinked",
+        file=sys.stderr,
+    )
+    return None
+
+
 async def _insert_audit(
     conn: asyncpg.Connection,
     *,
+    conversation_id: str | None,
     action: str,
     target: str,
     payload: dict[str, Any],
@@ -131,8 +176,9 @@ async def _insert_audit(
     await conn.execute(
         """
         INSERT INTO audit_log (conversation_id, actor, action, target, payload, result)
-        VALUES (NULL, $1, $2, $3, $4::jsonb, $5::jsonb)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
         """,
+        conversation_id,
         ACTOR,
         action,
         target,
@@ -413,6 +459,10 @@ async def issue_refund(params: IssueRefundInput, ctx: Context) -> RefundResult:
 
     async with app.pool.acquire() as conn:
         async with conn.transaction():
+            # Resolved inside the transaction, so the existence check and the
+            # rows that depend on it see the same snapshot.
+            conversation_id = await _resolve_conversation(conn, _conversation_id(ctx))
+
             # FOR UPDATE inside the transaction: two concurrent refunds on the
             # same order would otherwise both read 'placed' and both pay out.
             order = await conn.fetchrow(
@@ -445,6 +495,7 @@ async def issue_refund(params: IssueRefundInput, ctx: Context) -> RefundResult:
                 # error is raised after this block so the row survives.
                 await _insert_audit(
                     conn,
+                    conversation_id=conversation_id,
                     action="refund_blocked",
                     target=str(params.order_id),
                     payload=payload,
@@ -453,20 +504,23 @@ async def issue_refund(params: IssueRefundInput, ctx: Context) -> RefundResult:
             else:
                 refund_id = await conn.fetchval(
                     """
-                    INSERT INTO refunds (order_id, amount_cents, reason, issued_by)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO refunds
+                        (order_id, amount_cents, reason, issued_by, conversation_id)
+                    VALUES ($1, $2, $3, $4, $5)
                     RETURNING id
                     """,
                     params.order_id,
                     params.amount_cents,
                     params.reason,
                     ACTOR,
+                    conversation_id,
                 )
                 await conn.execute(
                     "UPDATE orders SET status = 'refunded' WHERE id = $1", params.order_id
                 )
                 await _insert_audit(
                     conn,
+                    conversation_id=conversation_id,
                     action="refund_issued",
                     target=str(params.order_id),
                     payload=payload,

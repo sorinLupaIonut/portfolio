@@ -141,15 +141,27 @@ def to_asyncpg_url(url: str) -> str:
     return urlunsplit(("postgresql+asyncpg", parsed.netloc, parsed.path, urlencode(query), ""))
 
 
-def connect_customer_data() -> MCPServerStreamableHttp:
+def connect_customer_data(session_id: str) -> MCPServerStreamableHttp:
     """The Worker's only route to business data.
 
     Not connected here -- the caller enters it as an async context manager, and
     the connection has to outlive every turn of the chat loop.
     """
+
+    def carry_conversation_id(_context: Any) -> dict[str, str]:
+        """Attach this conversation's id to every MCP request, as `_meta`.
+
+        The server writes it into refunds.conversation_id and its own audit rows,
+        which is what lets a refund be traced back to the conversation that
+        caused it. Sent out-of-band rather than as a tool argument: the model
+        never sees it, so it cannot omit it or forge another conversation's id.
+        """
+        return {"conversation_id": session_id}
+
     return MCPServerStreamableHttp(
         name="customer-data",
         params={"url": CUSTOMER_DATA_URL},
+        tool_meta_resolver=carry_conversation_id,
         # The gate lives here, on how the server is registered -- not inside the
         # tool. issue_refund moves money, so it pauses the run for a human yes/no
         # before it executes; the two read tools are absent from the list and run
@@ -325,7 +337,7 @@ async def main() -> None:
 
     async with AsyncExitStack() as stack:
         try:
-            customer_data = await stack.enter_async_context(connect_customer_data())
+            customer_data = await stack.enter_async_context(connect_customer_data(session_id))
         except Exception as error:
             # Worth catching rather than letting the raw connection error out:
             # a stopped server and a broken one look identical in the traceback,
