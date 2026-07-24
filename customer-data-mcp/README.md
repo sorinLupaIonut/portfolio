@@ -54,13 +54,20 @@ confident, plausible, wrong rankings.
 commits a `refund_blocked` audit row before the error is raised, so an attempt
 to over-refund is as traceable as a payment.
 
+## Since wired
+
+- **The approval gate on `issue_refund`** — `require_approval` on the Worker's
+  `MCPServerStreamableHttp` (`main.py`). A rejection writes a `refund_blocked`
+  audit row, so a refused refund is as traceable as a paid one.
+- **The conversation is carried across the boundary.** The Worker sends its
+  `session_id` in tool meta; the server resolves it and writes it to
+  `refunds.conversation_id` and its own `audit_log` rows.
+
 ## Not here yet
 
-- **The approval gate on `issue_refund`** — Decision 9, via `require_approval`
-  on the Worker's `MCPServerStreamableHttp`.
-- **No caller identity.** `refunds.issued_by` and `audit_log.actor` are both the
-  constant `customer-data-mcp`, and `refunds.conversation_id` is NULL, because
-  the server does not know which conversation it is serving.
+- **No caller identity beyond the conversation.** `refunds.issued_by` and
+  `audit_log.actor` are still the constant `customer-data-mcp`: the server knows
+  *which conversation* it is serving, not *who* is behind it.
 - **`orders` is empty.** Every seeded ticket has `order_id = NULL` and the order
   numbers live as free text inside ticket bodies. `issue_refund` works — proved
   against throwaway orders — but has no real data to act on.
