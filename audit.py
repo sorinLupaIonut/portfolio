@@ -36,6 +36,11 @@ ACTION_MESSAGE_SENT = "message_sent"
 ACTION_SKILL_ACTIVATED = "skill_activated"
 ACTION_CAPABILITY_INVOKED = "capability_invoked"
 ACTION_GUARDRAIL_TRIPPED = "guardrail_tripped"
+# Written by the Worker when a human rejects an approval-gated tool at the
+# terminal prompt, so the refusal is a row and not just an absence. The MCP
+# server writes its own 'refund_blocked' for an internal guard refusal; the
+# actor column ('worker' vs 'customer-data-mcp') tells the two apart.
+ACTION_REFUND_BLOCKED = "refund_blocked"
 
 # The Worker's own rows. The MCP server writes its rows as 'customer-data-mcp',
 # so the replay query can tell "the Worker asked" from "the server did".

@@ -1,6 +1,7 @@
 """Minimal terminal chat agent: a SandboxAgent on a local sandbox."""
 
 import asyncio
+import json
 import os
 import sys
 import uuid
@@ -41,6 +42,7 @@ from audit import (
     ACTION_GUARDRAIL_TRIPPED,
     ACTION_MESSAGE_RECEIVED,
     ACTION_MESSAGE_SENT,
+    ACTION_REFUND_BLOCKED,
     AuditHooks,
     AuditLog,
 )
@@ -148,6 +150,14 @@ def connect_customer_data() -> MCPServerStreamableHttp:
     return MCPServerStreamableHttp(
         name="customer-data",
         params={"url": CUSTOMER_DATA_URL},
+        # The gate lives here, on how the server is registered -- not inside the
+        # tool. issue_refund moves money, so it pauses the run for a human yes/no
+        # before it executes; the two read tools are absent from the list and run
+        # untouched. In Claude Code or OpenCode the client's own permission prompt
+        # is this same gate; require_approval is the standalone Worker's version.
+        # "always" means every issue_refund call is gated, regardless of amount --
+        # the amount ceiling is a separate concern the gate deliberately doesn't make.
+        require_approval={"always": {"tool_names": ["issue_refund"]}},
         # The three tools never change while the server is up, so fetching the
         # list once instead of on every run saves a round trip per turn.
         cache_tools_list=True,
@@ -159,6 +169,70 @@ def connect_customer_data() -> MCPServerStreamableHttp:
         # and a retry after a response is lost in transit pays twice. A failed
         # refund the human can see beats a silent double refund.
     )
+
+
+def approval_arguments(raw_item: Any) -> dict[str, Any]:
+    """Pull a gated tool call's arguments out of an approval item as a plain dict.
+
+    The model sends them as a JSON string. Our MCP tools each take a single
+    `params` object, so they arrive wrapped as {"params": {...}}; unwrap that one
+    level so the human sees order_id/amount_cents/reason, not a nested blob.
+    """
+    raw = getattr(raw_item, "arguments", None)
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except (TypeError, ValueError):
+        return {"_raw": raw}
+    if isinstance(parsed, dict) and set(parsed) == {"params"} and isinstance(parsed["params"], dict):
+        return parsed["params"]
+    return parsed if isinstance(parsed, dict) else {"_raw": parsed}
+
+
+def render_approval(tool_name: str, arguments: dict[str, Any]) -> str:
+    """The block the human reads before signing off on a gated tool call."""
+    lines = [f"\n[approval] {tool_name} needs your sign-off before it runs:"]
+    for key, value in arguments.items():
+        shown = value
+        # amount_cents is the honest storage unit but an unfriendly thing to eyeball;
+        # show the dollars beside it so a wrong order of magnitude is obvious.
+        if key == "amount_cents" and isinstance(value, int):
+            shown = f"{value} (${value / 100:,.2f})"
+        lines.append(f"    {key:<13}{shown}")
+    lines.append("  approve? [y/N] ")
+    return "\n".join(lines)
+
+
+async def resolve_approvals(
+    state: Any, interruptions: Sequence[Any], audit: AuditLog
+) -> None:
+    """Prompt for each gated tool call and record the decision on the run state.
+
+    Approval needs no audit row of its own: the tool then runs, and the
+    capability_invoked row the hooks write IS the proof it was approved. A
+    rejection is the opposite -- the tool never runs, so absence would be the
+    only trace. That is why a refusal gets its own explicit refund_blocked row.
+    """
+    for item in interruptions:
+        tool_name = getattr(item.raw_item, "name", None) or getattr(item, "tool_name", None) or "tool"
+        arguments = approval_arguments(item.raw_item)
+        print(render_approval(tool_name, arguments), end="")
+        answer = (await asyncio.to_thread(input, "")).strip().lower()
+        if answer == "y":
+            state.approve(item)
+            print("  -> approved\n")
+            continue
+        reason = "rejected by human at approval gate"
+        state.reject(item, rejection_message=reason)
+        print("  -> rejected\n")
+        # refund_blocked is issue_refund's word. If some other tool is ever gated,
+        # the rejection still lives in the model's history via rejection_message;
+        # it just doesn't borrow a domain action that would misdescribe it.
+        if tool_name == "issue_refund":
+            await audit.record_action(
+                ACTION_REFUND_BLOCKED,
+                target=f"mcp:{tool_name}",
+                payload={"arguments": arguments, "reason": reason},
+            )
 
 
 def build_agent(model: str, mcp_servers: Sequence[MCPServer]) -> SandboxAgent[None]:
@@ -305,6 +379,16 @@ async def main() -> None:
                     result = await Runner.run(
                         agent, message, run_config=run_config, session=session, hooks=hooks
                     )
+                    # A gated tool (issue_refund) does not execute -- it pauses the
+                    # run and comes back as an interruption. Resolve each, then
+                    # resume from the run state. A resume can surface a fresh
+                    # interruption, so this is a loop, not an if.
+                    while result.interruptions:
+                        state = result.to_state()
+                        await resolve_approvals(state, result.interruptions, audit)
+                        result = await Runner.run(
+                            agent, state, run_config=run_config, session=session, hooks=hooks
+                        )
                 except (
                     InputGuardrailTripwireTriggered,
                     OutputGuardrailTripwireTriggered,
