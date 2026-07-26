@@ -3,7 +3,9 @@
 import datetime
 
 import inngest
+from agents import Runner
 
+from .agent import greeter
 from .client import inngest_client
 
 
@@ -22,8 +24,11 @@ async def greet_customer(ctx: inngest.Context) -> dict[str, str]:
     # recompute when the function re-enters after the sleep.
     name = ctx.event.data.get("name", "there")
 
-    def compose_greeting() -> str:
-        return f"Hello, {name}! Thanks for reaching out."
+    async def compose_greeting() -> str:
+        # The whole model call lives inside the step. Its result is memoized, so
+        # a retry of a later step never pays for a second call to OpenAI.
+        result = await Runner.run(greeter, f"The customer's name is {name}.")
+        return result.final_output
 
     greeting = await ctx.step.run("compose-greeting", compose_greeting)
 
