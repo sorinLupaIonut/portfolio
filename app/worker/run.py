@@ -11,7 +11,9 @@ for running the worker standalone.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Literal
 
 from agents import RunState, Runner
@@ -19,7 +21,20 @@ from agents import RunState, Runner
 from . import db
 from .agent import SupportContext, build_run_config, build_support_agent, pending_approvals
 
+logger = logging.getLogger("uvicorn")
+
 Status = Literal["replied", "awaiting_approval", "unknown_sender"]
+
+BlockReason = Literal["rejected", "expired"]
+"""Why a refund did not happen. Both end the run without moving money, but a
+reviewer who said no and a reviewer who never answered are different problems."""
+
+APPROVAL_WINDOW = timedelta(hours=4)
+"""How long a reviewer has to answer before the refund is dropped.
+
+Policy, so it lives with the worker rather than with the scheduler that enforces
+it. Four hours is a number you can only honour if the wait is durable: an
+in-process pause this long dies with the first deploy."""
 
 MAX_RESUME_LAPS = 3
 """How many times a resumed run may come back still interrupted before we give up."""
@@ -132,6 +147,48 @@ async def record_refund_requested(
         "refund_requested",
         customer_id=customer_id,
         details={"pending": pending},
+        request_id=request_id,
+        run_id=run_id,
+    )
+
+
+async def notify_reviewer(
+    *, customer_id: str, run_id: str, request_id: str, pending: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Tell a human there is a refund waiting, and return what they were told.
+
+    A log line here; a Slack message or an email with an approve link in
+    production. Either way it belongs to the worker: it is an outbound action,
+    not part of how the pause is kept alive.
+
+    Both ids go out, not just the customer's. The reviewer's answer has to name
+    the run it is answering, or an approval meant for one refund could release a
+    different one that happens to be pending for the same customer.
+    """
+    ask = {
+        "customer_id": customer_id,
+        "run_id": run_id,
+        "request_id": request_id,
+        "tools": [call["tool"] for call in pending],
+        "arguments": [call["arguments"] for call in pending],
+    }
+    logger.warning("REFUND NEEDS APPROVAL: %s", ask)
+    return ask
+
+
+async def record_refund_blocked(
+    *, customer_id: str, run_id: str, request_id: str, reason: BlockReason
+) -> bool:
+    """Record that the refund path ended with no money moved.
+
+    Keyed on the same ``request_id`` the refund itself would use, so it is the
+    mirror image of ``refund_issued``: a replay cannot write a second one, and
+    the two can never both exist for the same request without it being obvious.
+    """
+    return await db.write_audit(
+        "refund_blocked",
+        customer_id=customer_id,
+        details={"reason": reason},
         request_id=request_id,
         run_id=run_id,
     )

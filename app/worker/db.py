@@ -37,6 +37,11 @@ ACTIONS: Final[frozenset[str]] = frozenset(
         "refund_approved",
         "refund_rejected",
         "refund_issued",
+        # The pair of refund_issued: the refund path ended and no money moved,
+        # because a reviewer said no or because nobody answered in time. Distinct
+        # from refund_rejected, which records the human's decision rather than
+        # the outcome at the tool.
+        "refund_blocked",
         "health_check_run",
     }
 )

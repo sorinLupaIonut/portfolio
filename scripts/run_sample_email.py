@@ -20,6 +20,7 @@ from app.worker.run import (
     IncomingEmail,
     handle_email,
     record_decision,
+    record_refund_blocked,
     record_reply,
     resume_after_decision,
 )
@@ -80,6 +81,15 @@ async def main(decision: str | None) -> None:
                 run_id=run_id,
                 request_id=request_id,
             )
+            if not approved:
+                # Same trail the durable function writes, so the standalone
+                # worker and the wrapped one stay readable side by side.
+                await record_refund_blocked(
+                    customer_id=outcome.customer_id,
+                    run_id=run_id,
+                    request_id=request_id,
+                    reason="rejected",
+                )
             outcome = await resume_after_decision(
                 outcome.state,
                 approved=approved,

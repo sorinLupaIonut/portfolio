@@ -22,14 +22,27 @@ import inngest
 
 from .client import inngest_client
 from .worker.run import (
+    APPROVAL_WINDOW,
     IncomingEmail,
     draft_reply,
     list_health_check_customers,
+    notify_reviewer,
+    record_decision,
     record_health_check,
     record_ingress,
+    record_refund_blocked,
     record_refund_requested,
     record_reply,
+    resume_after_decision,
 )
+
+DECISION_EVENT = "refund/approval.decided"
+"""The reviewer's answer: ``{"customer_id", "run_id", "approved", "reviewer"}``.
+
+An event rather than an HTTP call to the waiting process, because there may not
+be a waiting process. The run that asked for this decision can be suspended
+across a crash, a deploy, or four hours of nothing; the event is delivered to
+whatever picks it back up."""
 
 HEALTH_CHECK_EVENT = "customer/health_check.requested"
 
@@ -95,7 +108,12 @@ started five runs five seconds apart, all five started in the same instant."""
     ),
 )
 async def handle_customer_email(ctx: inngest.Context) -> dict[str, object]:
-    """Wake on a customer email, draft a reply, and record both ends of it."""
+    """Wake on a customer email, draft a reply, and record both ends of it.
+
+    When the agent reaches for a refund it stops and waits for a human, and that
+    wait is durable: the run can be suspended for four hours, across a crash or a
+    deploy, and still finish on the exact turn where it stopped.
+    """
     email = IncomingEmail.from_event(ctx.event.data)
 
     # Both ids are read out here, not minted inside a step. A fresh uuid in a
@@ -121,25 +139,117 @@ async def handle_customer_email(ctx: inngest.Context) -> dict[str, object]:
 
     drafted = await ctx.step.run("draft-reply", draft)
 
-    if drafted["status"] == "awaiting_approval":
-        # The agent stopped at the refund tool. For now the run just records that
-        # and ends; D5 turns this into a durable wait for a human's decision.
-        async def audit_refund_requested() -> None:
-            await record_refund_requested(
+    if drafted["status"] != "awaiting_approval":
+
+        async def audit_reply() -> None:
+            await record_reply(customer_id=customer_id, run_id=run_id, reply=drafted["reply"])
+
+        await ctx.step.run("audit-reply", audit_reply)
+        return drafted
+
+    # The agent stopped at the refund tool. Everything from here down is the
+    # durable pause: the SDK's own interruption only lives as long as the
+    # process, and the whole point is to outlive it.
+    #
+    # Where the paused run is kept is the quiet part. `draft-reply` already
+    # returned the serialized RunState as its output, so Inngest is holding it,
+    # not this process. That is what makes the wait below free: nothing of ours
+    # has to stay alive, and the run holds no concurrency slot while it waits.
+
+    async def audit_refund_requested() -> None:
+        await record_refund_requested(
+            customer_id=customer_id,
+            run_id=run_id,
+            request_id=request_id,
+            pending=drafted["pending"],
+        )
+
+    await ctx.step.run("audit-refund-requested", audit_refund_requested)
+
+    async def notify() -> dict[str, object]:
+        return await notify_reviewer(
+            customer_id=customer_id,
+            run_id=run_id,
+            request_id=request_id,
+            pending=drafted["pending"],
+        )
+
+    await ctx.step.run("notify-reviewer", notify)
+
+    decision = await ctx.step.wait_for_event(
+        "await-refund-approval",
+        event=DECISION_EVENT,
+        timeout=APPROVAL_WINDOW,
+        # Matched on the run as well as the customer. On the customer alone, an
+        # approval meant for one refund would release any other refund pending
+        # for the same customer, which is the wrong money on the wrong order.
+        if_exp=(
+            f"async.data.customer_id == '{customer_id}' "
+            f"&& async.data.run_id == '{run_id}'"
+        ),
+    )
+
+    if decision is None:
+        # Four hours, no answer. The refund is dropped rather than left pending
+        # forever, and that is a fact worth a row: an unanswered request looks
+        # nothing like a refused one when you come back to read the trail.
+        async def audit_expired() -> None:
+            await record_refund_blocked(
                 customer_id=customer_id,
                 run_id=run_id,
                 request_id=request_id,
-                pending=drafted["pending"],
+                reason="expired",
             )
 
-        await ctx.step.run("audit-refund-requested", audit_refund_requested)
-        return drafted
+        await ctx.step.run("audit-refund-expired", audit_expired)
+        return {"status": "expired", "customer_id": customer_id}
 
-    async def audit_reply() -> None:
-        await record_reply(customer_id=customer_id, run_id=run_id, reply=drafted["reply"])
+    approved = bool(decision.data.get("approved"))
+    reviewer = str(decision.data.get("reviewer") or "unknown")
 
-    await ctx.step.run("audit-reply", audit_reply)
-    return drafted
+    async def audit_decision() -> None:
+        await record_decision(
+            approved=approved,
+            customer_id=customer_id,
+            run_id=run_id,
+            request_id=request_id,
+            reviewer=reviewer,
+        )
+
+    await ctx.step.run("audit-decision", audit_decision)
+
+    if not approved:
+
+        async def audit_blocked() -> None:
+            await record_refund_blocked(
+                customer_id=customer_id,
+                run_id=run_id,
+                request_id=request_id,
+                reason="rejected",
+            )
+
+        await ctx.step.run("audit-refund-blocked", audit_blocked)
+
+    async def resume() -> dict[str, object]:
+        # The agent run lives inside the step. Outside it, Inngest would re-enter
+        # this code on every retry and call the model again, paying twice and
+        # firing the refund tool twice. Memoized, the refund fires once.
+        outcome = await resume_after_decision(
+            drafted["state"],
+            approved=approved,
+            customer_id=customer_id,
+            run_id=run_id,
+            request_id=request_id,
+        )
+        return outcome.as_dict()
+
+    resumed = await ctx.step.run("resume-after-decision", resume)
+
+    async def audit_resumed_reply() -> None:
+        await record_reply(customer_id=customer_id, run_id=run_id, reply=resumed["reply"])
+
+    await ctx.step.run("audit-reply-after-decision", audit_resumed_reply)
+    return resumed
 
 
 @inngest_client.create_function(
