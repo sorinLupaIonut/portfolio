@@ -12,14 +12,24 @@ from fastapi import FastAPI
 import inngest.fast_api
 
 from .client import inngest_client
-from .functions import handle_customer_email
+from .functions import (
+    daily_customer_health_check,
+    handle_customer_email,
+    run_customer_health_check,
+)
+
+FUNCTIONS = [
+    handle_customer_email,
+    daily_customer_health_check,
+    run_customer_health_check,
+]
 
 app = FastAPI(title="AI Agent Nervous System - function host")
 
 
 @app.get("/")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "functions": ["handle-customer-email"]}
+    return {"status": "ok", "functions": [fn.id for fn in FUNCTIONS]}
 
 
-inngest.fast_api.serve(app, inngest_client, [handle_customer_email])
+inngest.fast_api.serve(app, inngest_client, FUNCTIONS)

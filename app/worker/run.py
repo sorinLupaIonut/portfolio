@@ -150,6 +150,32 @@ async def record_decision(
     )
 
 
+HEALTH_CHECK_TIERS = ("pro", "enterprise")
+"""Who a daily health check covers. Policy belongs to the worker, not to the
+scheduler that happens to wake it."""
+
+
+async def list_health_check_customers() -> list[str]:
+    """The ids of the customers eligible for a daily health check."""
+    return [customer.id for customer in await db.list_customers(HEALTH_CHECK_TIERS)]
+
+
+async def record_health_check(*, customer_id: str, run_id: str, request_id: str) -> bool:
+    """Record one daily check. Returns False when this check already had a row.
+
+    The request_id here is the check's idempotency key. The event id already
+    stops a re-delivered tick from starting a second run; this stops a second row
+    even if one somehow does.
+    """
+    return await db.write_audit(
+        "health_check_run",
+        customer_id=customer_id,
+        details={"check": request_id},
+        request_id=request_id,
+        run_id=run_id,
+    )
+
+
 async def record_reply(*, customer_id: str, run_id: str, reply: str | None) -> None:
     """Record that a reply left the worker."""
     await db.write_audit(
