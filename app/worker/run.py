@@ -1,8 +1,12 @@
 """Running the agent on one email, and picking it back up after a decision.
 
-This is the whole worker as a plain async function. Nothing here knows about
-Inngest; the durable layer will call `handle_email` from inside a step and turn
-the in-memory pause below into one that survives a crash.
+This is the whole worker as plain async functions. Nothing here knows about
+Inngest; the durable layer calls these pieces from inside steps.
+
+The pieces are deliberately small and separately callable. A durable function
+wants each unit of work in its own step, so that a failure in one does not redo
+the ones already finished; `handle_email` at the bottom composes the same pieces
+for running the worker standalone.
 """
 
 from __future__ import annotations
@@ -35,6 +39,14 @@ class IncomingEmail:
     subject: str
     body: str
 
+    @classmethod
+    def from_event(cls, data: dict[str, Any]) -> IncomingEmail:
+        return cls(
+            from_email=data["from_email"],
+            subject=data.get("subject", ""),
+            body=data.get("body", ""),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class EmailOutcome:
@@ -45,33 +57,55 @@ class EmailOutcome:
     state: str | None = None
     """The paused run, serialized. The durable gate stores this and resumes from it."""
 
+    def as_dict(self) -> dict[str, Any]:
+        """A step's result has to survive a round trip through JSON."""
+        return {
+            "status": self.status,
+            "customer_id": self.customer_id,
+            "reply": self.reply,
+            "pending": self.pending,
+            "state": self.state,
+        }
+
 
 def _prompt(email: IncomingEmail) -> str:
     return f"From: {email.from_email}\nSubject: {email.subject}\n\n{email.body}"
 
 
-async def handle_email(email: IncomingEmail, *, run_id: str, request_id: str) -> EmailOutcome:
-    """Draft a reply to one customer email, pausing if the agent wants a refund.
+async def record_ingress(email: IncomingEmail, *, run_id: str) -> str | None:
+    """Resolve the sender and write the ingress audit row. Returns the customer id.
 
-    ``run_id`` and ``request_id`` are passed in, never generated here: a fresh id
-    invented inside this call would change on every retry once this runs inside a
-    step, and a replay would diverge from the original run.
+    The lookup lives here rather than in the caller so that a durable function
+    pays for it once: the customer id comes back as this step's memoized result
+    and the later steps read it from there instead of hitting Neon again.
+
+    No request_id on this row on purpose. Idempotency belongs on the refund, the
+    one action with an effect outside the database. An ingress row per run is
+    correct, and a recovery run after a bad deploy should write its own.
     """
     customer = await db.find_customer_by_email(email.from_email)
     if customer is None:
-        return EmailOutcome(status="unknown_sender")
+        return None
 
-    # No request_id on the ingress row on purpose. Idempotency belongs on the
-    # refund, the one action with an effect outside the database; an ingress row
-    # per run is correct, and a recovery run should write its own.
     await db.write_audit(
         "email_received",
         customer_id=customer.id,
         details={"from": email.from_email, "subject": email.subject},
         run_id=run_id,
     )
+    return customer.id
 
-    ctx = SupportContext(customer_id=customer.id, run_id=run_id, request_id=request_id)
+
+async def draft_reply(
+    email: IncomingEmail, *, customer_id: str, run_id: str, request_id: str
+) -> EmailOutcome:
+    """Run the agent on the email. Writes nothing: the caller records the outcome.
+
+    ``run_id`` and ``request_id`` are passed in, never generated here. A fresh id
+    minted inside this call would change on every retry once this runs inside a
+    step, and a replay would diverge from the original run.
+    """
+    ctx = SupportContext(customer_id=customer_id, run_id=run_id, request_id=request_id)
     result = await Runner.run(
         build_support_agent(),
         _prompt(email),
@@ -80,22 +114,50 @@ async def handle_email(email: IncomingEmail, *, run_id: str, request_id: str) ->
     )
 
     if result.interruptions:
-        pending = pending_approvals(result)
-        await db.write_audit(
-            "refund_requested",
-            customer_id=customer.id,
-            details={"pending": pending},
-            request_id=request_id,
-            run_id=run_id,
-        )
         return EmailOutcome(
             status="awaiting_approval",
-            customer_id=customer.id,
-            pending=pending,
+            customer_id=customer_id,
+            pending=pending_approvals(result),
             state=result.to_state().to_string(),
         )
 
-    return await _finish(result, customer_id=customer.id, run_id=run_id)
+    return EmailOutcome(status="replied", customer_id=customer_id, reply=result.final_output)
+
+
+async def record_refund_requested(
+    *, customer_id: str, run_id: str, request_id: str, pending: list[dict[str, Any]]
+) -> None:
+    """Record that the agent stopped and is waiting on a human."""
+    await db.write_audit(
+        "refund_requested",
+        customer_id=customer_id,
+        details={"pending": pending},
+        request_id=request_id,
+        run_id=run_id,
+    )
+
+
+async def record_decision(
+    *, approved: bool, customer_id: str, run_id: str, request_id: str, reviewer: str = "dev"
+) -> None:
+    """Record the human's answer, before the agent is resumed with it."""
+    await db.write_audit(
+        "refund_approved" if approved else "refund_rejected",
+        customer_id=customer_id,
+        details={"reviewer": reviewer},
+        request_id=request_id,
+        run_id=run_id,
+    )
+
+
+async def record_reply(*, customer_id: str, run_id: str, reply: str | None) -> None:
+    """Record that a reply left the worker."""
+    await db.write_audit(
+        "reply_drafted",
+        customer_id=customer_id,
+        details={"characters": len(reply or "")},
+        run_id=run_id,
+    )
 
 
 async def resume_after_decision(
@@ -105,17 +167,8 @@ async def resume_after_decision(
     customer_id: str,
     run_id: str,
     request_id: str,
-    reviewer: str = "dev",
 ) -> EmailOutcome:
     """Pick the paused run back up with the human's answer and let it finish."""
-    await db.write_audit(
-        "refund_approved" if approved else "refund_rejected",
-        customer_id=customer_id,
-        details={"reviewer": reviewer},
-        request_id=request_id,
-        run_id=run_id,
-    )
-
     agent = build_support_agent()
     ctx = SupportContext(customer_id=customer_id, run_id=run_id, request_id=request_id)
     # context_override is load-bearing: serializing a paused run drops the custom
@@ -150,15 +203,31 @@ async def resume_after_decision(
             "the decision is not reaching the tool"
         )
 
-    return await _finish(result, customer_id=customer_id, run_id=run_id)
+    return EmailOutcome(status="replied", customer_id=customer_id, reply=result.final_output)
 
 
-async def _finish(result: Any, *, customer_id: str, run_id: str) -> EmailOutcome:
-    reply = result.final_output
-    await db.write_audit(
-        "reply_drafted",
-        customer_id=customer_id,
-        details={"characters": len(reply or "")},
-        run_id=run_id,
+async def handle_email(email: IncomingEmail, *, run_id: str, request_id: str) -> EmailOutcome:
+    """The whole thing in one call, for running the worker without a nervous system.
+
+    The durable function does not use this: it calls the pieces above so each one
+    lands in its own step. This is what the standalone script runs.
+    """
+    customer_id = await record_ingress(email, run_id=run_id)
+    if customer_id is None:
+        return EmailOutcome(status="unknown_sender")
+
+    outcome = await draft_reply(
+        email, customer_id=customer_id, run_id=run_id, request_id=request_id
     )
-    return EmailOutcome(status="replied", customer_id=customer_id, reply=reply)
+
+    if outcome.status == "awaiting_approval":
+        await record_refund_requested(
+            customer_id=customer_id,
+            run_id=run_id,
+            request_id=request_id,
+            pending=outcome.pending,
+        )
+    else:
+        await record_reply(customer_id=customer_id, run_id=run_id, reply=outcome.reply)
+
+    return outcome

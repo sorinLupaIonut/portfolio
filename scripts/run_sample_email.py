@@ -16,7 +16,13 @@ import os
 import uuid
 
 from app.worker import db
-from app.worker.run import IncomingEmail, handle_email, resume_after_decision
+from app.worker.run import (
+    IncomingEmail,
+    handle_email,
+    record_decision,
+    record_reply,
+    resume_after_decision,
+)
 
 QUESTION = IncomingEmail(
     from_email="support@initech.example",
@@ -68,12 +74,21 @@ async def main(decision: str | None) -> None:
         if decision is not None and outcome.state and outcome.customer_id:
             approved = decision == "approve"
             rule(f"A human answers: {decision.upper()}")
+            await record_decision(
+                approved=approved,
+                customer_id=outcome.customer_id,
+                run_id=run_id,
+                request_id=request_id,
+            )
             outcome = await resume_after_decision(
                 outcome.state,
                 approved=approved,
                 customer_id=outcome.customer_id,
                 run_id=run_id,
                 request_id=request_id,
+            )
+            await record_reply(
+                customer_id=outcome.customer_id, run_id=run_id, reply=outcome.reply
             )
             print(outcome.reply)
     else:

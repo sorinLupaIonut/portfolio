@@ -1,19 +1,25 @@
 """Durable functions served by this host.
 
-This is the first layer of the nervous system. It adds nothing to the worker's
-logic: it takes the same `handle_email` call the standalone script makes and puts
-it inside a step, so its result is stored the moment it succeeds.
+The worker's logic is untouched; what changes is how the world reaches it. An
+event wakes this function, and each unit of work sits in its own step.
 
-What that buys: the agent call is the expensive part of the run, several seconds
-and real tokens. Inside `step.run` its result is memoized, so when a later step
-fails and Inngest retries the run, the agent is not called again. Without the
-step, every retry re-pays for the model and re-fires its tools.
+Why the audit writes are steps of their own rather than lines inside the agent
+step: a step's result is memoized the moment it succeeds. If the reply audit
+fails and the run retries, the ingress row is not written a second time and the
+agent is not called a second time, because both steps come back from memo. Fold
+them into one step and a failure at the end redoes all three.
 """
 
 import inngest
 
 from .client import inngest_client
-from .worker.run import IncomingEmail, handle_email
+from .worker.run import (
+    IncomingEmail,
+    draft_reply,
+    record_ingress,
+    record_refund_requested,
+    record_reply,
+)
 
 
 @inngest_client.create_function(
@@ -21,32 +27,48 @@ from .worker.run import IncomingEmail, handle_email
     trigger=inngest.TriggerEvent(event="customer/email.received"),
 )
 async def handle_customer_email(ctx: inngest.Context) -> dict[str, object]:
-    """Draft a reply to one customer email, durably."""
-    data = ctx.event.data
-    email = IncomingEmail(
-        from_email=data["from_email"],
-        subject=data.get("subject", ""),
-        body=data.get("body", ""),
-    )
+    """Wake on a customer email, draft a reply, and record both ends of it."""
+    email = IncomingEmail.from_event(ctx.event.data)
 
-    # Both ids are read out here, not minted inside the step. A fresh uuid in a
+    # Both ids are read out here, not minted inside a step. A fresh uuid in a
     # step body would differ on every retry, and a replay would stop matching the
     # original run's audit rows.
     run_id = ctx.run_id
     request_id = f"{run_id}-refund"
 
-    async def draft_reply() -> dict[str, object]:
-        outcome = await handle_email(email, run_id=run_id, request_id=request_id)
+    async def audit_ingress() -> str | None:
+        return await record_ingress(email, run_id=run_id)
+
+    customer_id = await ctx.step.run("audit-ingress", audit_ingress)
+    if customer_id is None:
+        return {"status": "unknown_sender", "from": email.from_email}
+
+    async def draft() -> dict[str, object]:
+        outcome = await draft_reply(
+            email, customer_id=customer_id, run_id=run_id, request_id=request_id
+        )
         # Only JSON-serializable values leave a step: Inngest stores this result
         # and hands it back verbatim on a retry.
-        return {
-            "status": outcome.status,
-            "customer_id": outcome.customer_id,
-            "reply": outcome.reply,
-            "pending": outcome.pending,
-            "state": outcome.state,
-        }
+        return outcome.as_dict()
 
-    # One step, the whole agent call inside it. D2 splits the audit writes out
-    # into steps of their own so each is memoized separately.
-    return await ctx.step.run("draft-reply", draft_reply)
+    drafted = await ctx.step.run("draft-reply", draft)
+
+    if drafted["status"] == "awaiting_approval":
+        # The agent stopped at the refund tool. For now the run just records that
+        # and ends; D5 turns this into a durable wait for a human's decision.
+        async def audit_refund_requested() -> None:
+            await record_refund_requested(
+                customer_id=customer_id,
+                run_id=run_id,
+                request_id=request_id,
+                pending=drafted["pending"],
+            )
+
+        await ctx.step.run("audit-refund-requested", audit_refund_requested)
+        return drafted
+
+    async def audit_reply() -> None:
+        await record_reply(customer_id=customer_id, run_id=run_id, reply=drafted["reply"])
+
+    await ctx.step.run("audit-reply", audit_reply)
+    return drafted
