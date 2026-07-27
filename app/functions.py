@@ -1,42 +1,52 @@
-"""Durable functions served by this host."""
+"""Durable functions served by this host.
 
-import datetime
+This is the first layer of the nervous system. It adds nothing to the worker's
+logic: it takes the same `handle_email` call the standalone script makes and puts
+it inside a step, so its result is stored the moment it succeeds.
+
+What that buys: the agent call is the expensive part of the run, several seconds
+and real tokens. Inside `step.run` its result is memoized, so when a later step
+fails and Inngest retries the run, the agent is not called again. Without the
+step, every retry re-pays for the model and re-fires its tools.
+"""
 
 import inngest
-from agents import Runner
 
-from .agent import greeter
 from .client import inngest_client
+from .worker.run import IncomingEmail, handle_email
 
 
 @inngest_client.create_function(
-    fn_id="greet-customer",
-    trigger=inngest.TriggerEvent(event="demo/greet"),
+    fn_id="handle-customer-email",
+    trigger=inngest.TriggerEvent(event="customer/email.received"),
 )
-async def greet_customer(ctx: inngest.Context) -> dict[str, str]:
-    """Greet, wait fifteen seconds durably, then say goodbye.
+async def handle_customer_email(ctx: inngest.Context) -> dict[str, object]:
+    """Draft a reply to one customer email, durably."""
+    data = ctx.event.data
+    email = IncomingEmail(
+        from_email=data["from_email"],
+        subject=data.get("subject", ""),
+        body=data.get("body", ""),
+    )
 
-    The sleep costs zero compute: the dev server holds the resume time and this
-    process sits idle. It can crash or reload during the wait and the run still
-    resumes at the next line, with the greeting returned from memo.
-    """
-    # Read outside the steps: this is deterministic, so it costs nothing to
-    # recompute when the function re-enters after the sleep.
-    name = ctx.event.data.get("name", "there")
+    # Both ids are read out here, not minted inside the step. A fresh uuid in a
+    # step body would differ on every retry, and a replay would stop matching the
+    # original run's audit rows.
+    run_id = ctx.run_id
+    request_id = f"{run_id}-refund"
 
-    async def compose_greeting() -> str:
-        # The whole model call lives inside the step. Its result is memoized, so
-        # a retry of a later step never pays for a second call to OpenAI.
-        result = await Runner.run(greeter, f"The customer's name is {name}.")
-        return result.final_output
+    async def draft_reply() -> dict[str, object]:
+        outcome = await handle_email(email, run_id=run_id, request_id=request_id)
+        # Only JSON-serializable values leave a step: Inngest stores this result
+        # and hands it back verbatim on a retry.
+        return {
+            "status": outcome.status,
+            "customer_id": outcome.customer_id,
+            "reply": outcome.reply,
+            "pending": outcome.pending,
+            "state": outcome.state,
+        }
 
-    greeting = await ctx.step.run("compose-greeting", compose_greeting)
-
-    await ctx.step.sleep("wait-fifteen-seconds", datetime.timedelta(seconds=15))
-
-    def compose_farewell() -> str:
-        return f"Goodbye, {name}. We will be in touch soon."
-
-    farewell = await ctx.step.run("compose-farewell", compose_farewell)
-
-    return {"greeting": greeting, "farewell": farewell}
+    # One step, the whole agent call inside it. D2 splits the audit writes out
+    # into steps of their own so each is memoized separately.
+    return await ctx.step.run("draft-reply", draft_reply)
