@@ -57,6 +57,19 @@ class Customer:
     tier: str
 
 
+MAX_CONNECTIONS = 10
+"""Ceiling on connections this worker holds open to Neon.
+
+Deliberately equal to the durable layer's global concurrency cap: that cap is
+sized to protect this pool, and this pool is sized to serve a full house of runs.
+The number is repeated rather than imported, because nothing under ``worker/``
+may import from the nervous system wrapped around it. If you change one, change
+the other; they are two ends of the same constraint.
+
+Set it lower and the excess runs queue inside psycopg, where Inngest cannot see
+them: the dashboard would show ten runs healthy and busy while half of them sit
+blocked on a connection."""
+
 _pool: ConnectionPool | None = None
 
 
@@ -66,7 +79,9 @@ def _get_pool() -> ConnectionPool:
         url = os.getenv("DATABASE_URL")
         if not url:
             raise RuntimeError("DATABASE_URL is not set; the worker cannot reach Neon.")
-        _pool = ConnectionPool(url, min_size=1, max_size=5, kwargs={"row_factory": dict_row})
+        _pool = ConnectionPool(
+            url, min_size=1, max_size=MAX_CONNECTIONS, kwargs={"row_factory": dict_row}
+        )
         _pool.wait(timeout=30)
     return _pool
 

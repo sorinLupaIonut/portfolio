@@ -8,7 +8,15 @@ step: a step's result is memoized the moment it succeeds. If the reply audit
 fails and the run retries, the ingress row is not written a second time and the
 agent is not called a second time, because both steps come back from memo. Fold
 them into one step and a failure at the end redoes all three.
+
+Flow control lives here too, as configuration on the function rather than code in
+the handler. Three limits, three different resources: a global concurrency cap
+for the database's connections, a per-customer cap so one loud sender cannot take
+the whole pool, and a throttle for OpenAI's per-minute quota. The worker below is
+untouched by all of it.
 """
+
+from datetime import timedelta
 
 import inngest
 
@@ -32,9 +40,59 @@ no way to test a fan-out. In production this is also the "run it now" button
 after a failed nightly."""
 
 
+GLOBAL_CONCURRENCY = 10
+"""Ceiling on steps of this function executing at once, whoever sent the email.
+
+Sized against the narrowest resource downstream, which here is the Postgres
+connection pool in ``worker/db.py``: that pool's ``max_size`` is the same number
+on purpose, so a full house of runs still finds a connection instead of queueing
+inside psycopg where Inngest cannot see it.
+
+Note "steps", not "runs". Inngest counts executing steps, so a run parked in
+``step.wait_for_event`` (D5's refund approval) holds no slot at all. That is what
+makes a four-hour human pause affordable."""
+
+PER_CUSTOMER_CONCURRENCY = 2
+"""...and no single sender may take more than this share of the ceiling.
+
+Without it, one customer who forwards forty emails fills all ten slots and
+everyone else waits behind them, even though there is nothing wrong with the
+system. The key is a CEL expression over the event, so Inngest can evaluate it
+before the run starts; the sender's address is the only customer identity that
+exists at that point, since the id is not resolved until the ingress step."""
+
+OPENAI_REQUESTS_PER_MINUTE = 30
+"""The downstream per-minute quota, which is a different limit from the two above.
+
+Concurrency answers "how many at once"; throttle answers "how many may start per
+minute". A cap of ten in flight still exceeds thirty a minute if each run is
+quick, so the connection pool and the OpenAI quota each need their own control.
+
+``burst`` is the pair of this number, not a decoration. It defaults to 1, which
+smooths thirty a minute into one every two seconds, stricter than the real quota
+and enough to serialize a perfectly legitimate spike. A per-minute bucket allows
+all thirty at once, so that is what we configure.
+
+Unlike the concurrency caps, this one is configured here and proven elsewhere:
+the local dev server records the setting but does not act on it. Measured, not
+assumed. Temporarily set to twelve a minute with ``burst=1``, which should have
+started five runs five seconds apart, all five started in the same instant."""
+
+
 @inngest_client.create_function(
     fn_id="handle-customer-email",
     trigger=inngest.TriggerEvent(event="customer/email.received"),
+    concurrency=[
+        inngest.Concurrency(limit=GLOBAL_CONCURRENCY),
+        inngest.Concurrency(
+            limit=PER_CUSTOMER_CONCURRENCY, key="event.data.from_email"
+        ),
+    ],
+    throttle=inngest.Throttle(
+        limit=OPENAI_REQUESTS_PER_MINUTE,
+        period=timedelta(minutes=1),
+        burst=OPENAI_REQUESTS_PER_MINUTE,
+    ),
 )
 async def handle_customer_email(ctx: inngest.Context) -> dict[str, object]:
     """Wake on a customer email, draft a reply, and record both ends of it."""
