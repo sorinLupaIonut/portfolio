@@ -1,0 +1,65 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MCP server (start this first)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/customer-data-mcp/server.py",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Worker (main.py)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      // Load-bearing: SKILLS_DIR is a relative path on purpose, and from any
+      // other directory the Worker loads zero skills without raising.
+      "cwd": "${workspaceFolder}",
+      // Also load-bearing: the chat loop calls input(). In the Debug Console
+      // there is nowhere to type, and the run appears to hang at "you >".
+      "console": "integratedTerminal",
+      // The interesting code runs inside the SDK: AuditHooks is called from
+      // agents/run_internal/tool_execution.py, and with justMyCode on you
+      // cannot step from the hook back out to see who called it.
+      "justMyCode": false,
+      "env": {
+        // Turns swallowed audit errors back into raised ones, so a bug in a
+        // hook stops the debugger instead of printing a warning and vanishing.
+        "AUDIT_STRICT": "1"
+      }
+    },
+    {
+      "name": "Worker (production behaviour, audit errors swallowed)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Seed and embed (--reset)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/seed/seed_and_embed.py",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args": ["--reset"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "MCP server + Worker",
+      "configurations": ["MCP server (start this first)", "Worker (main.py)"],
+      "stopAll": true
+    }
+  ]
+}

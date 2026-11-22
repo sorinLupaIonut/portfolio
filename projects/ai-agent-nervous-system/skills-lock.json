@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "inngest-durable-functions": {
+      "source": "inngest/inngest-skills",
+      "sourceType": "github",
+      "skillPath": "skills/inngest-durable-functions/SKILL.md",
+      "computedHash": "f3f5117f8a54bd9716c51b94bf78b0a6890b81c5ebbcf09644376a027ba6894c"
+    },
+    "inngest-events": {
+      "source": "inngest/inngest-skills",
+      "sourceType": "github",
+      "skillPath": "skills/inngest-events/SKILL.md",
+      "computedHash": "4fc14cc79c44b9045062e61646adf3a193fa4eb2cb808601f3bd5b2da0ee46ba"
+    },
+    "inngest-setup": {
+      "source": "inngest/inngest-skills",
+      "sourceType": "github",
+      "skillPath": "skills/inngest-setup/SKILL.md",
+      "computedHash": "9ebc8eb4c36aab7a6eef83c59a2bf8841cf83a01f29b37686d3198fa82d6efb0"
+    },
+    "inngest-steps": {
+      "source": "inngest/inngest-skills",
+      "sourceType": "github",
+      "skillPath": "skills/inngest-steps/SKILL.md",
+      "computedHash": "e1e5fe474150b63e571dda5e030b1b4eb6b630ff20cd7e2e59812e70825d64c6"
+    },
+    "neon-postgres": {
+      "source": "neondatabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/neon-postgres/SKILL.md",
+      "computedHash": "7cbf89e1135f27f482ca7e18bb6df15ec38307848d35364ed058fb9f5c0b7e99"
+    }
+  }
+}

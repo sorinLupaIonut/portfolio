@@ -1,0 +1,126 @@
+{
+  "generated_at": "2026-07-23T09:41:00+00:00",
+  "model": "claude-fable-5 (authored in-session by Claude Code; SDK path remains in generate_tickets.py)",
+  "count": 17,
+  "tickets": [
+    {
+      "category": "refund",
+      "customer_email": "dana.whitfield@example.com",
+      "summary": "Espresso machine arrived with cracked water tank, wants full refund",
+      "body": "My espresso machine from order ORD-58217 arrived on 2026-07-02 with the water tank split down one side, so it leaks the moment I fill it. I paid $214.50 and I'd rather have my money back than wait through a replacement, since this was a gift I now have to buy elsewhere.",
+      "resolution": "Full refund of $214.50 issued to the original card after the customer sent a photo of the damage; a prepaid return label was emailed and the refund posted within four business days."
+    },
+    {
+      "category": "refund",
+      "customer_email": "gwen.harlow@example.org",
+      "summary": "Hiking boots ordered a size small, return window missed, asks for partial refund",
+      "body": "I bought hiking boots on order ORD-61930 for $138.00 back on 2026-05-14, but I was traveling and only tried them on last week, well past the 30-day return window. They're a full size too small and unworn outside; I asked whether anything could still be done.",
+      "resolution": "Return declined as outside the window, but a one-time goodwill partial refund of $41.40 (30%) was issued and the customer kept the boots; customer accepted the outcome."
+    },
+    {
+      "category": "refund",
+      "customer_email": "farid.nassar@example.net",
+      "summary": "Tried to cancel desk order after it shipped, settled for store credit",
+      "body": "I ordered a standing desk (ORD-63122, $389.99) on 2026-06-27 and emailed to cancel two days later, but by then it had already left the warehouse. I refused the delivery at the door like your agent suggested and want to know where my money is.",
+      "resolution": "Once the refused shipment scanned back to the warehouse, $389.99 was issued as store credit per the late-cancellation policy, with the $24.00 outbound shipping not credited; customer used the credit on a smaller desk the same week."
+    },
+    {
+      "category": "refund",
+      "customer_email": "iris.kowalczyk@example.org",
+      "summary": "Asks refund of price difference after monitor dropped $60 in a sale",
+      "body": "The monitor I bought on 2026-07-08 for $299.00 (order ORD-64415) is now listed at $239.00 in your summer sale, one week later. I'd like the $60.00 difference refunded, since I would obviously have waited had I known.",
+      "resolution": "Price-adjustment refund refused as out of policy, which covers only drops within 48 hours of purchase; the customer was offered a 10% coupon on a future order and took it, though they noted they were unhappy with the policy."
+    },
+    {
+      "category": "refund",
+      "customer_email": "nadia.oyelaran@example.net",
+      "summary": "Refund approved two weeks ago has still not reached the customer's card",
+      "body": "You approved a refund of $162.30 on order ORD-59741 on 2026-06-28 and told me it would be back on my card within five business days, but fourteen days later there is still nothing. My bank says they have no pending credit from you at all, and at this point I have waited longer for the money than I waited for the item itself.",
+      "resolution": "The refund had failed silently at the processor because the card used for the original purchase had expired in the meantime; it was re-issued against the customer's replacement card once she confirmed the last four digits, posted within two business days, and a $15 credit was added for the delay."
+    },
+    {
+      "category": "login",
+      "customer_email": "bram.vandelaar@example.net",
+      "summary": "Password reset emails never arrive, blocked by employer's mail filter",
+      "body": "I've requested a password reset four times since yesterday and nothing shows up, not even in spam. My account email is my work address and our IT department confirmed the messages are being quarantined by the company filter, which they won't change for me.",
+      "resolution": "Identity confirmed via the last four digits of the card on file plus two recent order totals, then the account email was changed to the customer's personal address; the next reset email arrived and the customer signed in."
+    },
+    {
+      "category": "login",
+      "customer_email": "tomas.okafor@example.net",
+      "summary": "Phone with authenticator app stolen, no backup codes saved",
+      "body": "My phone was stolen on holiday and my authenticator app went with it; I never saved the backup codes. I can't get past the 2FA prompt and I have an open order (ORD-59984, $86.20) whose delivery address I urgently need to change before it ships on Friday.",
+      "resolution": "Identity verified through a government ID upload matching the account name and billing address, 2FA was reset and single-use recovery codes issued; the customer signed in, updated the delivery address before the ship date, and re-enrolled 2FA on the new phone."
+    },
+    {
+      "category": "login",
+      "customer_email": "selin.aydin@example.org",
+      "summary": "Account locked after a burst of failed sign-ins the customer says weren't hers",
+      "body": "I got an email saying my account was locked after too many failed sign-in attempts, but I hadn't tried to log in at all that day. I'm worried someone else was guessing at my password and I want to be sure they didn't get in.",
+      "resolution": "Login history showed a credential-stuffing burst from an unfamiliar country with no successful entry; the account was unlocked behind a forced password reset, all sessions were signed out, and the customer confirmed access with a new unique password."
+    },
+    {
+      "category": "login",
+      "customer_email": "hugo.beaumont@example.com",
+      "summary": "Registered email is a defunct ISP address, can't receive any account mail",
+      "body": "My account was registered under an address from an internet provider that shut down last year, so I can't receive password resets or order confirmations anymore. I still know my password but I'm locked out since you added the email verification step at sign-in.",
+      "resolution": "Identity confirmed against the full billing address, the card's last four digits, and the contents of the most recent order, after which the account email was updated to the customer's current address; verification mail arrived and sign-in succeeded."
+    },
+    {
+      "category": "duplicate_charge",
+      "customer_email": "priya.raghunathan@example.com",
+      "summary": "Card charged twice for the same bookshelf order, both charges posted",
+      "body": "My bank statement shows two separate $167.80 charges on 2026-07-10, both from you, but I only placed one order for a bookshelf (ORD-66201). Neither charge has dropped off after five days and my bank says both have fully posted.",
+      "resolution": "Payment logs confirmed a gateway error created a second capture; the duplicate $167.80 was refunded to the card and landed in five business days, and a $10 apology credit was added to the account."
+    },
+    {
+      "category": "duplicate_charge",
+      "customer_email": "colm.brennan@example.org",
+      "summary": "Pre-authorisation hold sitting next to the real charge, looks like double billing",
+      "body": "I see two $92.35 entries on my card for order ORD-66619 placed yesterday, and I want one of them removed. My banking app labels both as pending, which certainly looks like I've been billed twice for one order.",
+      "resolution": "Explained that one entry was the pre-authorisation hold and only the other would post; the hold was released and dropped off the customer's statement within three business days, with no refund needed and no money actually taken twice."
+    },
+    {
+      "category": "duplicate_charge",
+      "customer_email": "annette.dubois@example.net",
+      "summary": "Subscription billed again a month after customer cancelled it",
+      "body": "I cancelled my monthly coffee subscription on 2026-06-03 and have the confirmation email, yet I was charged $34.00 again on 2026-07-01. Please refund it and make sure this doesn't happen every month from now on.",
+      "resolution": "The cancellation had been recorded against an old duplicate subscription record while the active one kept billing; the $34.00 was refunded, the live subscription was terminated with a new confirmation sent, and no further charges occurred."
+    },
+    {
+      "category": "duplicate_charge",
+      "customer_email": "dana.whitfield@example.com",
+      "summary": "Declined payment retried overnight and both attempts ended up charging",
+      "body": "When I checked out on 2026-07-15 the payment page said my card was declined, so I tried again and it worked, but now I have two $58.90 charges for order ORD-67743. The first attempt clearly went through after all, just later than the error message suggested.",
+      "resolution": "The payments team traced a delayed capture on the initially-declined attempt, reversed the extra $58.90 within two business days, and filed the case against the gateway's retry handling; the customer kept the single correct charge."
+    },
+    {
+      "category": "shipping",
+      "customer_email": "tomas.okafor@example.net",
+      "summary": "Tracking frozen at the same depot scan for nine days",
+      "body": "My order ORD-60095 shipped on 2026-06-30 but the tracking has shown the same 'arrived at regional facility' scan since 2026-07-01, nine days now. The courier's own site tells me to contact the sender, so here I am; I paid $131.75 and have nothing to show for it.",
+      "resolution": "A courier investigation was opened and the package was declared lost after seven days without a scan; a replacement shipped with expedited delivery at no charge and arrived in three days, and the carrier claim was settled internally."
+    },
+    {
+      "category": "shipping",
+      "customer_email": "marisol.vega@example.com",
+      "summary": "Delivery photo shows a porch that isn't hers, package marked delivered",
+      "body": "The tracking for ORD-68812 says delivered on 2026-07-11 with a photo, but that is not my porch, not my doormat, and not my street. I've checked with my neighbours on both sides and nobody has it; the order was $76.40 of skincare I'd been waiting two weeks for.",
+      "resolution": "The carrier confirmed a misdelivery one street over but could not recover the parcel, so a claim was filed and a replacement shipped with signature-on-delivery required; the replacement arrived and the customer confirmed receipt."
+    },
+    {
+      "category": "shipping",
+      "customer_email": "otto.lindqvist@example.org",
+      "summary": "Box arrived resealed with tape and one of two headphones missing",
+      "body": "My package for ORD-69034 arrived today resealed with brown tape that isn't yours, and only one of the two headphone sets I ordered was inside. I was charged $178.00 for both and the packing slip even lists both items.",
+      "resolution": "A refund of $89.00 for the missing item was issued rather than a reship at the customer's request, a tampering claim was lodged with the carrier, and the refund posted in three business days."
+    },
+    {
+      "category": "shipping",
+      "customer_email": "june.macallister@example.net",
+      "summary": "Only one box of a two-box treadmill delivery ever arrived",
+      "body": "My treadmill (ORD-69277, $649.00) was supposed to arrive as two boxes, but only the box with the frame ever showed up on 2026-07-06. The console box has had no tracking movement at all, and I have half a treadmill in my hallway I can't assemble.",
+      "resolution": "The warehouse confirmed the second box was short-picked and never manifested; it was shipped from another depot with expedited service, arrived five days later, and the customer confirmed the treadmill assembled correctly."
+    }
+  ]
+}

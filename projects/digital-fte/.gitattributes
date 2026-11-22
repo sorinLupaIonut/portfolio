@@ -1,0 +1,11 @@
+# Keep LF in the working tree, not just in the repo.
+#
+# With core.autocrlf=true (the Git for Windows default) a checkout rewrites these
+# to CRLF, so every `git add` prints a conversion warning and tooling that writes
+# them back can flip a whole file to CRLF in one diff. Pinning the endings keeps
+# diffs limited to the lines that actually changed.
+#
+# This does NOT guard skill loading: CRLF frontmatter in a SKILL.md was tested
+# directly and parses correctly, description intact.
+*.md   text eol=lf
+*.json text eol=lf
